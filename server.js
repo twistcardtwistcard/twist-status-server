@@ -12,7 +12,7 @@ app.use(express.json());
 const statuses = {}; // In-memory transaction store
 const logFilePath = path.join(__dirname, 'webhook_logs.txt');
 
-// 🔒 Secure endpoint to receive transaction status
+// 🔒 Enregistrement sécurisé d’un statut
 app.post('/store-status', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   const authorizedKey = process.env.API_KEY;
@@ -65,7 +65,7 @@ app.post('/store-status', async (req, res) => {
   res.json({ success: true });
 });
 
-// 🌐 Public endpoint to check status by transaction_id
+// 🔍 Vérification par transaction_id
 app.get('/check-status', (req, res) => {
   const { transaction_id } = req.query;
 
@@ -77,7 +77,7 @@ app.get('/check-status', (req, res) => {
   res.json({ transaction_id, status });
 });
 
-// 🆕 New: check latest entry by phone
+// 🆕 Vérification du dernier enregistrement par numéro (sans +)
 app.get('/check-latest', (req, res) => {
   const { phone } = req.query;
   if (!phone) {
