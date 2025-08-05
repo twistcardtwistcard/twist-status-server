@@ -21,7 +21,7 @@ app.post('/store-status', async (req, res) => {
     return res.status(401).json({ success: false, message: 'Unauthorized' });
   }
 
-  const { transaction_id, status, email, available_credit, phone } = req.body;
+  const { transaction_id, status, email, available_credit, phone, code } = req.body;
 
   if (!transaction_id || !status) {
     return res.status(400).json({ success: false, message: 'Missing transaction_id or status' });
@@ -77,7 +77,7 @@ app.get('/check-status', (req, res) => {
   res.json({ transaction_id, status });
 });
 
-// 🆕 Public endpoint to check latest entry by phone number
+// 🆕 New: check latest entry by phone
 app.get('/check-latest', (req, res) => {
   const { phone } = req.query;
   if (!phone) {
@@ -96,7 +96,6 @@ app.get('/check-latest', (req, res) => {
     return res.status(404).json({ success: false, message: 'No entries found for this phone number' });
   }
 
-  // Get the last (most recent) matching log entry
   const lastLine = lines[lines.length - 1];
   const jsonMatch = lastLine.match(/{.*}/);
 
@@ -109,7 +108,8 @@ app.get('/check-latest', (req, res) => {
     return res.json({
       available_credit: entry.available_credit,
       transaction_id: entry.transaction_id,
-      timestamp: lastLine.substring(1, 20), // Extract timestamp from [..]
+      code: entry.code || null,
+      timestamp: lastLine.substring(1, 20)
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: 'Error parsing JSON log entry' });
