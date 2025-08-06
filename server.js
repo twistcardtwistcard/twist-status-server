@@ -135,6 +135,7 @@ app.get('/check-latest', (req, res) => {
   if (!fs.existsSync(logFilePath)) {
     return res.status(404).json({ success: false, message: 'No log file found' });
   }
+
   const lines = fs.readFileSync(logFilePath, 'utf-8')
     .split('\n')
     .filter(line => line.includes('/store-status:') && line.includes(phone));
@@ -151,11 +152,22 @@ app.get('/check-latest', (req, res) => {
 
   try {
     const entry = JSON.parse(jsonMatch[0]);
+
+    // Get the twistcode from code.json using hash(loan_id + contract_expiration)
+    const loanId = entry.loan_id;
+    const expiration = entry.contract_expiration;
+    let twistcode = null;
+
+    if (loanId && expiration && fs.existsSync(twistCodePath)) {
+      const hash = crypto.createHash('sha256').update(`${loanId}|${expiration}`).digest('hex');
+      const data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
+      twistcode = data[hash] || null;
+    }
+
     return res.json({
-      available_credit: entry.available_credit,
       transaction_id: entry.transaction_id,
-      code: entry.code || null,
-      timestamp: lastLine.substring(1, 20)
+      timestamp: lastLine.substring(1, 20),
+      code: twistcode
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: 'Error parsing JSON log entry' });
