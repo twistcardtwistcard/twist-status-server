@@ -11,7 +11,7 @@ app.use(cors());
 app.use(express.json());
 
 // Middleware to protect all GET routes with GET_API_KEY
-aapp.use((req, res, next) => {
+app.use((req, res, next) => {
   if (req.method === 'GET') {
     const apiKey = req.headers['x-api-key'];
     const authorizedKey = process.env.GET_API_KEY;
