@@ -24,7 +24,7 @@ app.use((req, res, next) => {
 
 const statuses = {}; // In-memory transaction store
 const logFilePath = path.join(__dirname, 'webhook_logs.txt');
-const twistCodePath = path.join(__dirname, 'code.json');
+const twistCodePath = path.join('/mnt/data', 'code.json');
 
 function getOrGenerateTwistCode(loanId, expiration) {
   if (!loanId || !expiration) return null;
