@@ -21,7 +21,19 @@ app.post('/store-status', async (req, res) => {
     return res.status(401).json({ success: false, message: 'Unauthorized' });
   }
 
-  const { transaction_id, status, email, available_credit, phone, code } = req.body;
+  const {
+    transaction_id,
+    status,
+    email,
+    available_credit,
+    loan_id,
+    contract_expiration,
+    product_code,
+    state,
+    limit,
+    phone,
+    code
+  } = req.body;
 
   if (!transaction_id || !status) {
     return res.status(400).json({ success: false, message: 'Missing transaction_id or status' });
@@ -34,31 +46,52 @@ app.post('/store-status', async (req, res) => {
 
   statuses[transaction_id] = status;
 
-  if (email && typeof available_credit !== 'undefined') {
-    try {
-      const acResponse = await fetch(`${process.env.AC_API_URL}/api/3/contact/sync`, {
-        method: 'POST',
-        headers: {
-          'Api-Token': process.env.AC_API_KEY,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          contact: {
-            email: email,
-            fieldValues: [
-              {
-                field: process.env.AC_FIELD_ID,
-                value: available_credit
-              }
-            ]
-          }
-        })
-      });
+  if (email) {
+    const fieldMap = {
+      available_credit: '78',
+      loan_id: '80',
+      contract_expiration: '86',
+      product_code: '84',
+      state: '85',
+      limit: '82'
+    };
 
-      const result = await acResponse.json();
-      console.log('ActiveCampaign sync response:', result);
-    } catch (error) {
-      console.error('Error updating ActiveCampaign:', error);
+    const fieldValues = Object.entries(fieldMap)
+      .filter(([key]) => typeof req.body[key] !== 'undefined')
+      .map(([key, fieldId]) => ({
+        field: fieldId,
+        value: req.body[key]
+      }));
+
+    // ➕ Add field 79 with "YES" if state is active
+    if (typeof state === 'string' && state.toLowerCase() === 'active') {
+      fieldValues.push({
+        field: '79',
+        value: 'YES'
+      });
+    }
+
+    if (fieldValues.length > 0) {
+      try {
+        const acResponse = await fetch(`${process.env.AC_API_URL}/api/3/contact/sync`, {
+          method: 'POST',
+          headers: {
+            'Api-Token': process.env.AC_API_KEY,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            contact: {
+              email,
+              fieldValues
+            }
+          })
+        });
+
+        const result = await acResponse.json();
+        console.log('ActiveCampaign sync response:', result);
+      } catch (error) {
+        console.error('Error updating ActiveCampaign:', error);
+      }
     }
   }
 
