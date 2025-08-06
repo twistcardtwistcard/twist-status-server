@@ -43,6 +43,10 @@ function getOrGenerateTwistCode(loanId, expiration) {
 
   const newCode = Array.from({ length: 12 }, () => Math.floor(Math.random() * 10)).join('');
   data[hash] = newCode;
+
+  console.log('🔧 Writing twistcode to:', twistCodePath);
+  console.log('📦 Data to write:', JSON.stringify(data, null, 2));
+
   fs.writeFileSync(twistCodePath, JSON.stringify(data, null, 2));
   console.log(`Generated new twistcode: ${newCode} for hash: ${hash}`);
   return newCode;
@@ -135,7 +139,6 @@ app.get('/check-latest', (req, res) => {
   if (!fs.existsSync(logFilePath)) {
     return res.status(404).json({ success: false, message: 'No log file found' });
   }
-
   const lines = fs.readFileSync(logFilePath, 'utf-8')
     .split('\n')
     .filter(line => line.includes('/store-status:') && line.includes(phone));
@@ -153,7 +156,6 @@ app.get('/check-latest', (req, res) => {
   try {
     const entry = JSON.parse(jsonMatch[0]);
 
-    // Get the twistcode from code.json using hash(loan_id + contract_expiration)
     const loanId = entry.loan_id;
     const expiration = entry.contract_expiration;
     let twistcode = null;
@@ -169,8 +171,9 @@ app.get('/check-latest', (req, res) => {
       timestamp: lastLine.substring(1, 20),
       code: twistcode
     });
+
   } catch (err) {
-    return res.status(500).json({ success: false, message: 'Error parsing JSON log entry' });
+    return res.status(500).json({ success: false, message: 'Error parsing log entry' });
   }
 });
 
