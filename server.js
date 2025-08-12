@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
 const fs = require('fs');
+const fsPromises = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 
@@ -10,22 +11,34 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Middleware to protect all GET routes with GET_API_KEY
+/* ---------------- Static files & hosted form ---------------- */
+const PUBLIC_DIR = path.join(__dirname, 'public');
+app.use('/public', express.static(PUBLIC_DIR));
+app.get('/twistpay-form', (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'twistpay-form.html'));
+});
+
+/* ---------------- GET protection (allowlist public/form) ---------------- */
+const OPEN_GET_PREFIXES = ['/public', '/twistpay-form'];
 app.use((req, res, next) => {
   if (req.method === 'GET') {
-    const apiKey = req.headers['x-api-key'];
-    const authorizedKey = process.env.GET_API_KEY;
-    if (!apiKey || apiKey !== authorizedKey) {
-      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    if (!OPEN_GET_PREFIXES.some(p => req.path.startsWith(p))) {
+      const apiKey = req.headers['x-api-key'];
+      const authorizedKey = process.env.GET_API_KEY;
+      if (!apiKey || apiKey !== authorizedKey) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
     }
   }
   next();
 });
 
+/* ---------------- Existing state & paths ---------------- */
 const statuses = {}; // In-memory transaction store
 const logFilePath = path.join(__dirname, 'webhook_logs.txt');
 const twistCodePath = path.join('/mnt/data', 'code.json');
 
+/* ---------------- Existing twist code generator (unchanged) ---------------- */
 function getOrGenerateTwistCode(loanId, expiration) {
   if (!loanId || !expiration) return null;
   const hash = crypto.createHash('sha256').update(`${loanId}|${expiration}`).digest('hex');
@@ -52,7 +65,147 @@ function getOrGenerateTwistCode(loanId, expiration) {
   return newCode;
 }
 
-// 🔒 Enregistrement sécurisé d’un statut
+/* ---------------- Helpers for validation ---------------- */
+function middle4Of(code12) {
+  if (!code12 || String(code12).length < 12) return null;
+  return String(code12).slice(4, 8); // digits 5–8
+}
+function parseMMYY(mmYY) {
+  const m = String(mmYY || '').match(/^(\d{2})\/(\d{2})$/);
+  return m ? { mm: m[1], yy: m[2] } : null;
+}
+function normalizeMMYYFromStored(v) {
+  if (!v) return null;
+  const s = String(v);
+  let m;
+  if ((m = s.match(/^(\d{2})\/(\d{2})$/))) return `${m[1]}/${m[2]}`;           // MM/YY
+  if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return `${m[2]}/${m[1].slice(-2)}`; // YYYY-MM-DD -> MM/YY
+  return null;
+}
+async function readLatestPayloadByLoanIdEndsWith(last6) {
+  try {
+    if (!fs.existsSync(logFilePath)) return null;
+    const raw = await fsPromises.readFile(logFilePath, 'utf8');
+    const lines = raw.split('\n').filter(Boolean).reverse();
+    for (const line of lines) {
+      if (!line.includes('/store-status:')) continue;
+      const jsonMatch = line.match(/{.*}/);
+      if (!jsonMatch) continue;
+      try {
+        const obj = JSON.parse(jsonMatch[0]);
+        const loanId = String(obj.loan_id || '');
+        if (loanId.endsWith(last6)) return obj;
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
+/* ---------------- Secure PRE-VALIDATE (new) ---------------- */
+app.post('/pre-validate', async (req, res) => {
+  try {
+    const {
+      transaction_id,
+      orderno,
+      amount,
+      cardNumber,
+      expiration,
+      twist,
+      email,
+      phone,
+      postal,
+      firstName, lastName, address, city, // captured (no validation)
+      otpCode
+    } = req.body || {};
+
+    // Presence
+    if (!transaction_id || !orderno || !amount || !cardNumber || !expiration || !twist || !email || !phone || !postal || !otpCode) {
+      return res.status(400).json({ ok: false, message: 'Missing required fields.' });
+    }
+
+    // Card checks
+    const cleanCard = String(cardNumber).replace(/\D/g, '');
+    if (!cleanCard.startsWith('71461567')) return res.json({ ok: false, message: 'Card prefix invalid.' });
+    if (cleanCard.length !== 16) return res.json({ ok: false, message: 'Card length invalid.' });
+
+    // Map last 6 -> latest payload for that loan
+    const last6 = cleanCard.slice(-6);
+    const latest = await readLatestPayloadByLoanIdEndsWith(last6);
+    if (!latest) return res.json({ ok: false, message: 'No matching loan found.' });
+
+    const loanId = String(latest.loan_id || '');
+    const acEmail = String(latest.email || latest.customer_email || '').trim().toLowerCase();
+    const acPhone = String(latest.phone || latest.customer_phone || '').replace(/[^\d]/g, '');
+    const acPostal = String(latest.postal_code || latest.postal || '').trim().toUpperCase();
+    const acAvail = Number(latest.available_credit || 0);
+    const acExpiryRaw = String(latest.contract_expiration || ''); // may be MM/YY or YYYY-MM-DD
+
+    // Email
+    if (acEmail && String(email).trim().toLowerCase() !== acEmail) {
+      return res.json({ ok: false, message: 'Email does not match account.' });
+    }
+
+    // Phone (last 10)
+    const inPhoneDigits = String(phone).replace(/[^\d]/g, '');
+    if (acPhone && inPhoneDigits.slice(-10) !== acPhone.slice(-10)) {
+      return res.json({ ok: false, message: 'Phone does not match account.' });
+    }
+
+    // Postal
+    const inPostal = String(postal).trim().toUpperCase().replace(/\s/g, '');
+    const refPostal = acPostal.replace(/\s/g, '');
+    if (acPostal && inPostal !== refPostal) {
+      return res.json({ ok: false, message: 'Postal code does not match account.' });
+    }
+
+    // Amount <= available_credit
+    const amt = Number(String(amount).replace(/[^\d.]/g, ''));
+    if (Number.isFinite(acAvail) && Number.isFinite(amt) && amt > acAvail) {
+      return res.json({ ok: false, message: 'Amount exceeds available credit.' });
+    }
+
+    // Expiration match
+    const inExp = parseMMYY(expiration);
+    if (!inExp) return res.json({ ok: false, message: 'Expiration format invalid.' });
+    const storedMMYY = normalizeMMYYFromStored(acExpiryRaw);
+    if (!storedMMYY || storedMMYY !== `${inExp.mm}/${inExp.yy}`) {
+      return res.json({ ok: false, message: 'Expiration does not match contract.' });
+    }
+
+    // TWIST middle 4 (code.json uses hash(loan_id|contract_expiration))
+    let twistMap = {};
+    if (fs.existsSync(twistCodePath)) {
+      try { twistMap = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8')); } catch {}
+    }
+    const hashKey = crypto.createHash('sha256').update(`${loanId}|${acExpiryRaw}`).digest('hex');
+    const fullCode = twistMap[hashKey];
+    const mid4 = middle4Of(fullCode);
+    if (!mid4 || String(twist) !== mid4) {
+      return res.json({ ok: false, message: 'TWIST code incorrect.' });
+    }
+
+    // OTP verification (server-side)
+    const otpResp = await fetch('https://twilio-otp-server.onrender.com/verify-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, code: otpCode })
+    });
+    const otpData = await otpResp.json().catch(() => null);
+    if (!otpData || !otpData.success) {
+      return res.json({ ok: false, message: 'OTP invalid or expired.' });
+    }
+
+    // Mark as pending so client polling works without exposing GET key
+    statuses[transaction_id] = 'pending';
+
+    return res.json({ ok: true, message: 'Validated', loan_id: loanId });
+  } catch (e) {
+    console.error('pre-validate error:', e);
+    return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+/* ---------------- Existing secure status store ---------------- */
 app.post('/store-status', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   const authorizedKey = process.env.API_KEY;
@@ -87,7 +240,7 @@ app.post('/store-status', async (req, res) => {
 
   statuses[transaction_id] = status;
 
-  // 🔁 Sync to ActiveCampaign if email is present
+  // ActiveCampaign sync
   if (email) {
     const fieldValues = [];
     if (typeof available_credit !== 'undefined') fieldValues.push({ field: 78, value: available_credit });
@@ -97,7 +250,6 @@ app.post('/store-status', async (req, res) => {
     if (typeof state !== 'undefined') fieldValues.push({ field: 85, value: state });
     if (typeof limit !== 'undefined') fieldValues.push({ field: 82, value: limit });
     if (typeof product_description !== 'undefined') fieldValues.push({ field: 88, value: product_description });
-
     if (state === 'active') fieldValues.push({ field: 79, value: 'YES' });
 
     try {
@@ -114,7 +266,7 @@ app.post('/store-status', async (req, res) => {
     }
   }
 
-  // 🔑 Generate twistcode
+  // Generate twistcode (if not exists)
   if (loan_id && contract_expiration) {
     getOrGenerateTwistCode(loan_id, contract_expiration);
   }
@@ -122,7 +274,19 @@ app.post('/store-status', async (req, res) => {
   res.json({ success: true });
 });
 
-// 🔍 Vérification par transaction_id
+/* ---------------- Safe client polling (no API key) ---------------- */
+app.post('/client-check-status', (req, res) => {
+  try {
+    const { transaction_id } = req.body || {};
+    if (!transaction_id) return res.status(400).json({ success: false, message: 'Missing transaction_id' });
+    const status = statuses[transaction_id] || 'pending';
+    return res.json({ success: true, status });
+  } catch (e) {
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+/* ---------------- Existing GET routes (still protected) ---------------- */
 app.get('/check-status', (req, res) => {
   const { transaction_id } = req.query;
   if (!transaction_id) {
@@ -132,7 +296,6 @@ app.get('/check-status', (req, res) => {
   res.json({ transaction_id, status });
 });
 
-// 🆕 Vérification du dernier enregistrement par numéro (sans +)
 app.get('/check-latest', (req, res) => {
   const { phone } = req.query;
   if (!phone) {
@@ -179,7 +342,6 @@ app.get('/check-latest', (req, res) => {
   }
 });
 
-// 🆕 Get twistcode by loan_id and contract_expiration
 app.get('/get-code', (req, res) => {
   const { loan_id, contract_expiration } = req.query;
   if (!loan_id || !contract_expiration) {
@@ -200,5 +362,6 @@ app.get('/get-code', (req, res) => {
   res.json({ twistcode });
 });
 
+/* ---------------- Start server ---------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
