@@ -72,7 +72,8 @@ app.post('/store-status', async (req, res) => {
     state,
     limit,
     phone,
-    code
+    code,
+    product_description // <-- added
   } = req.body;
 
   if (!transaction_id || !status) {
@@ -97,6 +98,11 @@ app.post('/store-status', async (req, res) => {
     if (typeof limit !== 'undefined') fieldValues.push({ field: 82, value: limit });
 
     if (state === 'active') fieldValues.push({ field: 79, value: 'YES' });
+
+    // <-- added: sync product_description to AC field 88
+    if (typeof product_description !== 'undefined') {
+      fieldValues.push({ field: 88, value: String(product_description) });
+    }
 
     try {
       await fetch(`${process.env.AC_API_URL}/api/3/contact/sync`, {
