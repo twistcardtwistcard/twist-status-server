@@ -2,25 +2,29 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>TWIST Card Payment</title>
 <style>
-  body { font-family: system-ui, sans-serif; background: #f3f4f6; padding: 1.5rem; }
-  .form-wrapper { max-width: 520px; margin: auto; }
-  .form-container { background: white; padding: 1.5rem; border-radius: 12px; box-shadow: 0 0 10px rgba(0,0,0,.08); position: relative; }
+  :root { --brand:#f97316; --bg:#f3f4f6; --muted:#6b7280; --ok:#16a34a; --bad:#dc2626; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); padding: 1.5rem; }
+  .form-wrapper { max-width: 540px; margin: auto; }
+  .form-container { background: #fff; padding: 1.5rem; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.06); position: relative; }
   .form-group { margin-bottom: 1rem; }
   label { font-weight: 600; display: block; margin-bottom: 0.35rem; }
-  input { width: 100%; padding: 0.6rem; font-size: 1rem; border-radius: 8px; border: 1px solid #cfcfcf; }
+  input { width: 100%; padding: .65rem .7rem; font-size: 1rem; border-radius: 8px; border: 1px solid #cfcfcf; outline: none; }
+  input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(249,115,22,.15); }
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
-  button { background: #f97316; color: #fff; border: 0; padding: .75rem 1.1rem; border-radius: 8px; cursor: pointer; font-weight: 600; }
+  button { background: var(--brand); color: #fff; border: 0; padding: .8rem 1.1rem; border-radius: 8px; cursor: pointer; font-weight: 700; }
   button[disabled] { opacity: .6; cursor: not-allowed; }
-  .hidden { display: none; }
-  .spinner { width: 40px; height: 40px; border: 4px solid #ccc; border-top: 4px solid #f97316; border-radius: 50%; animation: spin 1s linear infinite; margin: 1rem auto; }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  .muted { color: var(--muted); font-size: .92rem; }
   .notice { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; padding: .9rem; border-radius: 8px; margin-bottom: 1rem; }
-  .muted { color: #6b7280; font-size: .9rem; }
-  .ok { color: #16a34a; font-weight: 700; }
-  .bad { color: #dc2626; font-weight: 700; }
+  .hidden { display: none; }
+  .spinner { width: 40px; height: 40px; border: 4px solid #ccc; border-top: 4px solid var(--brand); border-radius: 50%; animation: spin 1s linear infinite; margin: 1rem auto; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .ok { color: var(--ok); font-weight: 700; }
+  .bad { color: var(--bad); font-weight: 700; }
+  .btn-inline { display:flex; gap:.5rem; }
+  .err { color: var(--bad); margin-top:.4rem; font-size:.9rem; }
 </style>
 </head>
 <body>
@@ -28,9 +32,10 @@
   <h2>Pay for your order with your TWIST CARD</h2>
   <p id="orderDetails" class="muted"></p>
 
-  <div class="form-container">
-    <div class="form-logo-top" style="text-align:center; margin-bottom:1rem;">
-      <img style="max-width:160px" src="https://cdn.shopify.com/s/files/1/0745/9635/2225/files/Twist_500ppx.jpg?v=1748980607" alt="Twist Card">
+  <div class="form-container" role="region" aria-label="Twist Card payment form">
+    <div style="text-align:center; margin-bottom:1rem;">
+      <img style="max-width:160px" alt="Twist Card"
+           src="https://cdn.shopify.com/s/files/1/0745/9635/2225/files/Twist_500ppx.jpg?v=1748980607">
     </div>
 
     <div class="notice hidden" id="autoFillNotice">
@@ -38,32 +43,33 @@
       To pay with your card, click on the link provided in your order confirmation.
     </div>
 
+    <!-- STEP 1 -->
     <form id="paymentForm" autocomplete="off" novalidate>
       <fieldset style="background:#eef3f7; padding:1rem; border:none; border-radius:10px; margin-bottom:1rem;">
         <div class="form-group">
           <label for="orderno">Order Number</label>
-          <input type="text" id="orderno" readonly>
+          <input type="text" id="orderno" readonly aria-readonly="true">
         </div>
         <div class="form-group">
           <label for="amount">Amount</label>
-          <input type="text" id="amount" readonly>
+          <input type="text" id="amount" readonly aria-readonly="true">
         </div>
       </fieldset>
 
       <div class="form-group">
         <label for="cardNumber">Card Number (7146 1567 XXX XXX)</label>
-        <input type="text" id="cardNumber" maxlength="19" required>
-        <div class="muted">Must start with <strong>71461567</strong>.</div>
+        <input type="text" id="cardNumber" maxlength="19" inputmode="numeric" required>
+        <div class="muted">Must start with <strong>71461567</strong> and be 16 digits.</div>
       </div>
 
       <div class="row">
         <div class="form-group">
           <label for="expiration">Expiration (MM/YY)</label>
-          <input type="text" id="expiration" placeholder="MM/YY" required>
+          <input type="text" id="expiration" placeholder="MM/YY" inputmode="numeric" required>
         </div>
         <div class="form-group">
           <label for="twist">TWIST Code (XXXX)</label>
-          <input type="text" id="twist" maxlength="4" required>
+          <input type="text" id="twist" maxlength="4" inputmode="numeric" required>
         </div>
       </div>
 
@@ -106,8 +112,8 @@
 
       <div class="form-group">
         <label for="otpPhone">Phone (+1XXXXXXXXXX)</label>
-        <div style="display:flex; gap:.5rem;">
-          <input type="text" id="otpPhone" required autocomplete="tel">
+        <div class="btn-inline">
+          <input type="text" id="otpPhone" required autocomplete="tel" placeholder="+1##########">
           <button type="button" id="sendOtpBtn">Send OTP</button>
         </div>
         <div id="sendOtpNote" class="muted"></div>
@@ -115,26 +121,30 @@
 
       <div class="form-group">
         <label for="otpCode">Enter OTP</label>
-        <div style="display:flex; gap:.5rem;">
-          <input type="text" id="otpCode" required>
+        <div class="btn-inline">
+          <input type="text" id="otpCode" required inputmode="numeric" placeholder="6-digit code">
           <button type="button" id="verifyOtpBtn">Verify OTP</button>
         </div>
-        <div id="otpStatus" style="margin-top:.5rem; font-weight:700;"></div>
+        <div id="otpStatus" class="muted" style="margin-top:.5rem; font-weight:700;"></div>
       </div>
 
       <button type="submit" id="submitBtn" disabled>Submit Payment</button>
       <div id="loadingSpinner" class="hidden" style="text-align:center; margin-top: 1rem;">
-        <div class="spinner"></div>
+        <div class="spinner" aria-hidden="true"></div>
         <p>Processing your payment...</p>
       </div>
+
+      <div id="clientErr" class="err hidden"></div>
     </form>
 
+    <!-- STEP 2 -->
     <div id="confirmationStep" class="hidden" style="text-align:center;">
       <h3>STEP 2 — We are validating your information.</h3>
-      <div class="spinner"></div>
-      <p>Please wait a second for your confirmation.</p>
+      <div class="spinner" aria-hidden="true"></div>
+      <p>Please wait a moment for confirmation.</p>
     </div>
 
+    <!-- STEP 3 -->
     <div id="confirmationSuccess" class="hidden" style="text-align:center;">
       <h2 class="ok">✅ Transaction Approved</h2>
       <p>Thank you! Your payment was successfully processed.</p>
@@ -148,124 +158,176 @@
 </div>
 
 <script>
-  const urlParams = new URLSearchParams(window.location.search);
-  const amount = urlParams.get('amount') || '';
-  const orderno = urlParams.get('orderno') || '';
-  const emailQP = urlParams.get('email') || '';
+  /* ---------------- URL params (set by embed loader) ---------------- */
+  const qp = new URLSearchParams(window.location.search);
+  const amountQP = qp.get('amount') || '';
+  const ordernoQP = qp.get('orderno') || '';
+  const emailQP  = qp.get('email') || '';
 
-  document.getElementById('amount').value = amount;
-  document.getElementById('orderno').value = orderno;
+  document.getElementById('amount').value = amountQP;
+  document.getElementById('orderno').value = ordernoQP;
   if (emailQP) document.getElementById('email').value = emailQP;
 
-  if (!orderno || !amount) document.getElementById('autoFillNotice').classList.remove('hidden');
+  if (!ordernoQP || !amountQP) document.getElementById('autoFillNotice').classList.remove('hidden');
   document.getElementById('orderDetails').innerHTML =
-    `Order Number: <strong>${orderno || '-'}</strong><br>Total: <strong>$${amount || '-'}</strong>`;
+    `Order Number: <strong>${ordernoQP || '-'}</strong><br>Total: <strong>$${amountQP || '-'}</strong>`;
 
+  /* ---------------- Formatting helpers ---------------- */
+  function normalizePhoneToE164_CA(input) {
+    const digits = String(input || '').replace(/\D/g, '');
+    const last10 = digits.slice(-10);
+    return last10.length === 10 ? `+1${last10}` : null;
+  }
+
+  /* ---------------- Inputs: masks and guards ---------------- */
   const cardEl = document.getElementById('cardNumber');
+  const expEl = document.getElementById('expiration');
+  const twistEl = document.getElementById('twist');
+  const phoneEl = document.getElementById('otpPhone');
+  const otpEl = document.getElementById('otpCode');
+  const clientErr = document.getElementById('clientErr');
+
   cardEl.addEventListener('input', function () {
     let v = this.value.replace(/\D/g, '');
     if (v.length > 16) v = v.slice(0, 16);
     this.value = v.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
   });
-
-  document.getElementById('twist').addEventListener('input', function () {
-    this.value = this.value.replace(/\D/g, '').slice(0, 4);
-  });
-
-  document.getElementById('expiration').addEventListener('input', function () {
+  expEl.addEventListener('input', function () {
     let v = this.value.replace(/\D/g, '');
     if (v.length >= 3) this.value = v.slice(0,2) + '/' + v.slice(2,4);
     else this.value = v;
   });
-
-  const phoneInput = document.getElementById('otpPhone');
-  phoneInput.addEventListener('input', () => {
-    let value = phoneInput.value.replace(/[^\d+]/g, '');
-    if (!value.startsWith('+1')) value = '+1' + value.replace('+','');
-    if (value.length > 12) value = value.slice(0, 12);
-    phoneInput.value = value;
+  twistEl.addEventListener('input', function () {
+    this.value = this.value.replace(/\D/g, '').slice(0, 4);
+  });
+  phoneEl.addEventListener('input', () => {
+    const norm = normalizePhoneToE164_CA(phoneEl.value);
+    phoneEl.value = norm || '+1';
+  });
+  otpEl.addEventListener('input', () => {
+    otpEl.value = otpEl.value.replace(/\D/g, '').slice(0, 6);
   });
 
+  /* ---------------- OTP (Twilio) ---------------- */
   const sendOtpBtn = document.getElementById('sendOtpBtn');
   const verifyOtpBtn = document.getElementById('verifyOtpBtn');
   const otpStatus = document.getElementById('otpStatus');
   const sendOtpNote = document.getElementById('sendOtpNote');
+  const submitBtn = document.getElementById('submitBtn');
 
   sendOtpBtn.onclick = async () => {
-    const phone = phoneInput.value;
-    if (!/^\+1\d{10}$/.test(phone)) return alert("Enter valid Canadian number (+1XXXXXXXXXX).");
+    const normPhone = normalizePhoneToE164_CA(phoneEl.value);
+    if (!normPhone) return alert("Enter a valid Canadian number (e.g., +14165551234).");
+
     sendOtpBtn.disabled = true;
-    const res = await fetch('https://twilio-otp-server.onrender.com/send-otp', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ phone })
-    });
-    const data = await res.json();
-    sendOtpBtn.disabled = false;
-    sendOtpNote.textContent = data.success ? "OTP sent." : ("Error: " + (data.error||''));
+    sendOtpNote.textContent = "Sending...";
+    try {
+      const res = await fetch('https://twilio-otp-server.onrender.com/send-otp', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ phone: normPhone })
+      });
+      const data = await res.json();
+      sendOtpNote.textContent = data.success ? "OTP sent." : ("Error: " + (data.error||'Unknown error'));
+    } catch (e) {
+      sendOtpNote.textContent = `Network error: ${e.message}`;
+    } finally {
+      sendOtpBtn.disabled = false;
+    }
   };
 
   verifyOtpBtn.onclick = async () => {
-    const phone = phoneInput.value;
-    const code  = document.getElementById('otpCode').value.trim();
+    const normPhone = normalizePhoneToE164_CA(phoneEl.value);
+    const code = String(otpEl.value || '').trim();
+    if (!normPhone) return alert("Enter a valid Canadian number (e.g., +14165551234).");
+    if (!/^\d{6}$/.test(code)) return alert("Enter the 6-digit OTP code.");
+
     otpStatus.textContent = "Verifying...";
-    const res  = await fetch('https://twilio-otp-server.onrender.com/verify-otp', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ phone, code })
-    });
-    const data = await res.json();
-    const ok = !!data.success;
-    otpStatus.textContent = ok ? "✅ OTP verified!" : "❌ Invalid OTP";
-    otpStatus.style.color = ok ? "green" : "red";
-    document.getElementById('submitBtn').disabled = !ok;
+    otpStatus.style.color = "";
+    try {
+      const res = await fetch('https://twilio-otp-server.onrender.com/verify-otp', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ phone: normPhone, code })
+      });
+      const data = await res.json();
+      if (data.success) {
+        otpStatus.textContent = "✅ OTP verified!";
+        otpStatus.style.color = "green";
+        submitBtn.disabled = false; // we will still re-check server-side
+      } else {
+        otpStatus.textContent = `❌ Invalid OTP${data.error ? ' – ' + data.error : ''}`;
+        otpStatus.style.color = "red";
+        submitBtn.disabled = true;
+      }
+    } catch (e) {
+      otpStatus.textContent = `Network error: ${e.message}`;
+      otpStatus.style.color = "red";
+      submitBtn.disabled = true;
+    }
   };
+
+  /* ---------------- Submit handler ---------------- */
+  function showErr(msg) {
+    clientErr.textContent = msg;
+    clientErr.classList.remove('hidden');
+    setTimeout(() => clientErr.classList.add('hidden'), 5000);
+  }
 
   document.getElementById('paymentForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const rawCard = cardEl.value.replace(/\s/g, '');
-    if (!rawCard.startsWith('71461567')) return alert('Card must start with 71461567');
-    if (rawCard.length !== 16) return alert('Card must be 16 digits');
+    if (!rawCard.startsWith('71461567')) return showErr('Card must start with 71461567.');
+    if (rawCard.length !== 16) return showErr('Card must be 16 digits.');
+    if (!/^\d{2}\/\d{2}$/.test(expEl.value)) return showErr('Expiration must be MM/YY.');
+    if (!/^\d{4}$/.test(twistEl.value)) return showErr('TWIST Code must be 4 digits.');
 
-    const transactionId = crypto.randomUUID ? crypto.randomUUID() : ('t_' + Math.random().toString(36).slice(2));
+    const normPhone = normalizePhoneToE164_CA(phoneEl.value);
+    if (!normPhone) return showErr('Phone format invalid. Use +1##########.');
+    if (!/^\d{6}$/.test(otpEl.value)) return showErr('OTP must be 6 digits.');
+
+    const transactionId = (crypto?.randomUUID && crypto.randomUUID()) || ('t_' + Math.random().toString(36).slice(2));
 
     const payload = {
       transaction_id: transactionId,
       orderno: document.getElementById('orderno').value,
       amount: document.getElementById('amount').value,
       cardNumber: rawCard,
-      expiration: document.getElementById('expiration').value,
-      twist: document.getElementById('twist').value,
+      expiration: expEl.value,
+      twist: twistEl.value,
       name: document.getElementById('name').value,
       email: document.getElementById('email').value,
-      phone: phoneInput.value,
+      phone: normPhone, // normalized!
       postal: document.getElementById('postal').value,
       firstName: document.getElementById('firstName').value,
       lastName: document.getElementById('lastName').value,
       address: document.getElementById('address').value,
       city: document.getElementById('city').value,
-      otpCode: document.getElementById('otpCode').value
+      otpCode: otpEl.value
     };
 
     document.getElementById('loadingSpinner').classList.remove('hidden');
 
     try {
+      // Server-side validation (card prefix, last6→loan, email/phone/postal/expiry/twist/amount + OTP)
       const pre = await fetch('https://twist-status-server.onrender.com/pre-validate', {
         method:'POST',
         headers:{ 'Content-Type':'application/json' },
         body: JSON.stringify(payload)
       });
       const preData = await pre.json();
+
       if (!pre.ok || !preData?.ok) {
         document.getElementById('loadingSpinner').classList.add('hidden');
-        return alert(preData?.message || 'Validation failed');
+        return showErr(preData?.message || 'Validation failed.');
       }
 
+      // Submit to your payment back-end
       await fetch('https://form-backend-p44w.onrender.com/submit-payment', {
         method:'POST',
         headers:{ 'Content-Type':'application/json' },
         body: JSON.stringify(payload)
       });
 
+      // Move to STEP 2 and poll for status (safe POST, no GET api key)
       document.getElementById('paymentForm').classList.add('hidden');
       document.getElementById('confirmationStep').classList.remove('hidden');
       document.getElementById('loadingSpinner').classList.add('hidden');
@@ -293,7 +355,7 @@
 
     } catch (err) {
       document.getElementById('loadingSpinner').classList.add('hidden');
-      alert("❌ Error: " + err.message);
+      showErr("Network error: " + err.message);
     }
   });
 </script>
