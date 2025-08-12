@@ -9,6 +9,7 @@
     "https://draecollection.com",
     "https://www.draecollection.com",
     "https://app.twistcard.ca"
+    "https://pqwkcy-ek.myshopify.com/"
   ];
 
   // Check that the embedding page is on the allowlist
