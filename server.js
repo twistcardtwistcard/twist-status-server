@@ -11,61 +11,48 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* ---------------- Static files & hosted form ---------------- */
+/* ---------------- Static files & hosted form (NO API KEY) ---------------- */
 const PUBLIC_DIR = path.join(__dirname, 'public');
 app.use('/public', express.static(PUBLIC_DIR));
 app.get('/twistpay-form', (_req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'twistpay-form.html'));
 });
+// Health check
+app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
-/* ---------------- GET protection (allowlist public/form) ---------------- */
-const OPEN_GET_PREFIXES = ['/public', '/twistpay-form'];
+/* ---------------- GET protection (allowlist public/form/healthz) ---------------- */
+const OPEN_GET_PREFIXES = ['/public', '/twistpay-form', '/healthz'];
 app.use((req, res, next) => {
-  if (req.method === 'GET') {
-    if (!OPEN_GET_PREFIXES.some(p => req.path.startsWith(p))) {
-      const apiKey = req.headers['x-api-key'];
-      const authorizedKey = process.env.GET_API_KEY;
-      if (!apiKey || apiKey !== authorizedKey) {
-        return res.status(401).json({ success: false, message: 'Unauthorized' });
-      }
+  if (req.method === 'GET' && !OPEN_GET_PREFIXES.some(p => req.path.startsWith(p))) {
+    const apiKey = req.headers['x-api-key'];
+    const authorizedKey = process.env.GET_API_KEY;
+    if (!apiKey || apiKey !== authorizedKey) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
   }
   next();
 });
 
-/* ---------------- Existing state & paths ---------------- */
-const statuses = {}; // In-memory transaction store
+/* ---------------- In-memory status + paths ---------------- */
+const statuses = {}; // { transaction_id: 'pending'|'approved'|... }
 const logFilePath = path.join(__dirname, 'webhook_logs.txt');
 const twistCodePath = path.join('/mnt/data', 'code.json');
 
-/* ---------------- Existing twist code generator (unchanged) ---------------- */
+/* ---------------- Helpers ---------------- */
 function getOrGenerateTwistCode(loanId, expiration) {
   if (!loanId || !expiration) return null;
   const hash = crypto.createHash('sha256').update(`${loanId}|${expiration}`).digest('hex');
   let data = {};
-
   if (fs.existsSync(twistCodePath)) {
-    try {
-      data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
-    } catch (e) {
-      console.error('Failed to parse code.json');
-    }
+    try { data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8')); }
+    catch { console.error('Failed to parse code.json'); }
   }
-
   if (data[hash]) return data[hash];
-
   const newCode = Array.from({ length: 12 }, () => Math.floor(Math.random() * 10)).join('');
   data[hash] = newCode;
-
-  console.log('🔧 Writing twistcode to:', twistCodePath);
-  console.log('📦 Data to write:', JSON.stringify(data, null, 2));
-
   fs.writeFileSync(twistCodePath, JSON.stringify(data, null, 2));
-  console.log(`Generated new twistcode: ${newCode} for hash: ${hash}`);
   return newCode;
 }
-
-/* ---------------- Helpers for validation ---------------- */
 function middle4Of(code12) {
   if (!code12 || String(code12).length < 12) return null;
   return String(code12).slice(4, 8); // digits 5–8
@@ -78,7 +65,7 @@ function normalizeMMYYFromStored(v) {
   if (!v) return null;
   const s = String(v);
   let m;
-  if ((m = s.match(/^(\d{2})\/(\d{2})$/))) return `${m[1]}/${m[2]}`;           // MM/YY
+  if ((m = s.match(/^(\d{2})\/(\d{2})$/))) return `${m[1]}/${m[2]}`;                 // MM/YY
   if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return `${m[2]}/${m[1].slice(-2)}`; // YYYY-MM-DD -> MM/YY
   return null;
 }
@@ -100,8 +87,14 @@ async function readLatestPayloadByLoanIdEndsWith(last6) {
   } catch {}
   return null;
 }
+// Normalize Canadian numbers to E.164 (+1##########)
+function normE164CA(v) {
+  const digits = String(v || '').replace(/\D/g, '');
+  const last10 = digits.slice(-10);
+  return last10.length === 10 ? `+1${last10}` : null;
+}
 
-/* ---------------- Secure PRE-VALIDATE (new) ---------------- */
+/* ---------------- PRE-VALIDATE (rules + OTP) ---------------- */
 app.post('/pre-validate', async (req, res) => {
   try {
     const {
@@ -114,7 +107,7 @@ app.post('/pre-validate', async (req, res) => {
       email,
       phone,
       postal,
-      firstName, lastName, address, city, // captured (no validation)
+      firstName, lastName, address, city, // captured (no validation here)
       otpCode
     } = req.body || {};
 
@@ -184,11 +177,13 @@ app.post('/pre-validate', async (req, res) => {
       return res.json({ ok: false, message: 'TWIST code incorrect.' });
     }
 
-    // OTP verification (server-side)
+    // OTP verification (server-side) with normalized phone
+    const normPhone = normE164CA(phone);
+    if (!normPhone) return res.json({ ok: false, message: 'Phone format invalid.' });
     const otpResp = await fetch('https://twilio-otp-server.onrender.com/verify-otp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, code: otpCode })
+      body: JSON.stringify({ phone: normPhone, code: otpCode })
     });
     const otpData = await otpResp.json().catch(() => null);
     if (!otpData || !otpData.success) {
@@ -205,11 +200,10 @@ app.post('/pre-validate', async (req, res) => {
   }
 });
 
-/* ---------------- Existing secure status store ---------------- */
+/* ---------------- Secure status store (from your processor) ---------------- */
 app.post('/store-status', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   const authorizedKey = process.env.API_KEY;
-
   if (!apiKey || apiKey !== authorizedKey) {
     return res.status(401).json({ success: false, message: 'Unauthorized' });
   }
@@ -226,7 +220,7 @@ app.post('/store-status', async (req, res) => {
     limit,
     phone,
     code,
-    product_description // <-- added
+    product_description // optional
   } = req.body;
 
   if (!transaction_id || !status) {
@@ -240,7 +234,7 @@ app.post('/store-status', async (req, res) => {
 
   statuses[transaction_id] = status;
 
-  // ActiveCampaign sync
+  // Optional: sync to ActiveCampaign
   if (email) {
     const fieldValues = [];
     if (typeof available_credit !== 'undefined') fieldValues.push({ field: 78, value: available_credit });
@@ -251,14 +245,10 @@ app.post('/store-status', async (req, res) => {
     if (typeof limit !== 'undefined') fieldValues.push({ field: 82, value: limit });
     if (typeof product_description !== 'undefined') fieldValues.push({ field: 88, value: product_description });
     if (state === 'active') fieldValues.push({ field: 79, value: 'YES' });
-
     try {
       await fetch(`${process.env.AC_API_URL}/api/3/contact/sync`, {
         method: 'POST',
-        headers: {
-          'Api-Token': process.env.AC_API_KEY,
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Api-Token': process.env.AC_API_KEY, 'Content-Type': 'application/json' },
         body: JSON.stringify({ contact: { email, fieldValues } })
       });
     } catch (err) {
@@ -266,7 +256,7 @@ app.post('/store-status', async (req, res) => {
     }
   }
 
-  // Generate twistcode (if not exists)
+  // Ensure a twistcode exists
   if (loan_id && contract_expiration) {
     getOrGenerateTwistCode(loan_id, contract_expiration);
   }
@@ -289,34 +279,25 @@ app.post('/client-check-status', (req, res) => {
 /* ---------------- Existing GET routes (still protected) ---------------- */
 app.get('/check-status', (req, res) => {
   const { transaction_id } = req.query;
-  if (!transaction_id) {
-    return res.status(400).json({ success: false, message: 'Missing transaction_id' });
-  }
+  if (!transaction_id) return res.status(400).json({ success: false, message: 'Missing transaction_id' });
   const status = statuses[transaction_id] || 'pending';
   res.json({ transaction_id, status });
 });
 
 app.get('/check-latest', (req, res) => {
   const { phone } = req.query;
-  if (!phone) {
-    return res.status(400).json({ success: false, message: 'Missing phone number' });
-  }
-  if (!fs.existsSync(logFilePath)) {
-    return res.status(404).json({ success: false, message: 'No log file found' });
-  }
+  if (!phone) return res.status(400).json({ success: false, message: 'Missing phone number' });
+  if (!fs.existsSync(logFilePath)) return res.status(404).json({ success: false, message: 'No log file found' });
+
   const lines = fs.readFileSync(logFilePath, 'utf-8')
     .split('\n')
     .filter(line => line.includes('/store-status:') && line.includes(phone));
 
-  if (lines.length === 0) {
-    return res.status(404).json({ success: false, message: 'No entries found for this phone number' });
-  }
+  if (lines.length === 0) return res.status(404).json({ success: false, message: 'No entries found for this phone number' });
 
   const lastLine = lines[lines.length - 1];
   const jsonMatch = lastLine.match(/{.*}/);
-  if (!jsonMatch) {
-    return res.status(500).json({ success: false, message: 'Failed to parse log entry' });
-  }
+  if (!jsonMatch) return res.status(500).json({ success: false, message: 'Failed to parse log entry' });
 
   try {
     const entry = JSON.parse(jsonMatch[0]);
@@ -362,6 +343,6 @@ app.get('/get-code', (req, res) => {
   res.json({ twistcode });
 });
 
-/* ---------------- Start server ---------------- */
+/* ---------------- Boot ---------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
