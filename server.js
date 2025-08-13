@@ -113,23 +113,21 @@ function middle4Of(code12) {
   if (!code12 || String(code12).length < 12) return null;
   return String(code12).slice(4, 8);
 }
-
-// normalize a raw expiration value into "MMYY" if possible
-function toMMYY(raw) {
-  const s = String(raw || '').trim();
+function parseMMYY(mmYY) {
+  const m = String(mmYY || '').match(/^(\d{2})\/(\d{2})$/);
+  return m ? { mm: m[1], yy: m[2] } : null;
+}
+function normalizeMMYYFromStored(v) {
+  if (!v) return null;
+  const s = String(v);
   let m;
-  // MMYY (digits only)
-  if (/^\d{4}$/.test(s)) return s;
-  // MM/YY -> MMYY
-  m = s.match(/^(\d{2})\/(\d{2})$/);
-  if (m) return `${m[1]}${m[2]}`;
-  // YYYY-MM-DD -> MMYY
-  m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (m) return `${m[2]}${m[1].slice(-2)}`;
+  if ((m = s.match(/^(\d{2})\/(\d{2})$/))) return `${m[1]}/${m[2]}`;                 // MM/YY
+  if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return `${m[2]}/${m[1].slice(-2)}`; // YYYY-MM-DD -> MM/YY
   return null;
 }
 
 /* --------- Phone + expiration utilities for resilient matching --------- */
+// collect all phone-like fields from a log entry
 function phonesFromEntry(entry) {
   if (!entry || typeof entry !== 'object') return [];
   const out = [];
@@ -138,19 +136,27 @@ function phonesFromEntry(entry) {
   }
   return out;
 }
+// last 10 digits comparator
 const last10 = (v) => String(v || '').replace(/\D/g, '').slice(-10);
+// normalize expiration into multiple candidate formats
 function expCandidates(v) {
   const s = String(v || '').trim();
   const out = new Set();
-  if (s) out.add(s);
+  if (s) out.add(s); // raw
+
+  // MM/YY
   let m = s.match(/^(\d{2})\/(\d{2})$/);
   if (m) { out.add(`${m[1]}${m[2]}`); out.add(`${m[1]}/${m[2]}`); }
+
+  // MMYY
   if (/^\d{4}$/.test(s)) { out.add(s); out.add(`${s.slice(0,2)}/${s.slice(2)}`); }
+
+  // YYYY-MM-DD
   m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (m) {
-    out.add(`${m[2]}${m[1].slice(-2)}`);
-    out.add(`${m[2]}/${m[1].slice(-2)}`);
-    out.add(s);
+    out.add(`${m[2]}${m[1].slice(-2)}`);   // MMYY
+    out.add(`${m[2]}/${m[1].slice(-2)}`);  // MM/YY
+    out.add(s);                            // raw
   }
   return Array.from(out);
 }
@@ -163,6 +169,10 @@ function findTwistByLoanAndExpVariants(loanId, expiration, codeMap) {
   return null;
 }
 
+/**
+ * Scan newest→oldest across MERGED logs.
+ * Accept ANY line that contains a JSON object (old logs might not have "/store-status:" marker).
+ */
 async function readLatestPayloadByLoanIdEndsWith(last6) {
   try {
     const raw = readMergedLogText();
@@ -201,8 +211,7 @@ app.post('/pre-validate', async (req, res) => {
       email,
       phone,
       postal,
-      // optional extras (kept for compatibility; not validated here)
-      firstName, lastName, address, city,
+      firstName, lastName, address, city, // captured (no validation here)
       otpCode
     } = req.body || {};
 
@@ -211,9 +220,10 @@ app.post('/pre-validate', async (req, res) => {
       return res.status(400).json({ ok: false, message: 'Missing required fields.' });
     }
 
-    // Card checks (UPDATED: 14 digits, no prefix rule)
+    // Card checks
     const cleanCard = String(cardNumber).replace(/\D/g, '');
-    if (cleanCard.length !== 14) return res.json({ ok: false, message: 'Card length invalid (must be 14 digits).' });
+    if (!cleanCard.startsWith('71461567')) return res.json({ ok: false, message: 'Card prefix invalid.' });
+    if (cleanCard.length !== 16) return res.json({ ok: false, message: 'Card length invalid.' });
 
     // Map last 6 -> latest payload for that loan
     const last6 = cleanCard.slice(-6);
@@ -225,7 +235,7 @@ app.post('/pre-validate', async (req, res) => {
     const acPhone = String(latest.phone || latest.customer_phone || '').replace(/[^\d]/g, '');
     const acPostal = String(latest.postal_code || latest.postal || '').trim().toUpperCase();
     const acAvail = Number(latest.available_credit || 0);
-    const acExpiryRaw = String(latest.contract_expiration || ''); // may be MM/YY or YYYY-MM-DD or MMYY
+    const acExpiryRaw = String(latest.contract_expiration || ''); // may be MM/YY or YYYY-MM-DD
 
     // Email
     if (acEmail && String(email).trim().toLowerCase() !== acEmail) {
@@ -251,11 +261,11 @@ app.post('/pre-validate', async (req, res) => {
       return res.json({ ok: false, message: 'Amount exceeds available credit.' });
     }
 
-    // Expiration match (UPDATED: expect input MMYY; compare as MMYY)
-    const inExpMMYY = toMMYY(expiration);
-    if (!inExpMMYY) return res.json({ ok: false, message: 'Expiration format invalid (MMYY).' });
-    const storedMMYY = toMMYY(acExpiryRaw);
-    if (!storedMMYY || storedMMYY !== inExpMMYY) {
+    // Expiration match
+    const inExp = parseMMYY(expiration);
+    if (!inExp) return res.json({ ok: false, message: 'Expiration format invalid.' });
+    const storedMMYY = normalizeMMYYFromStored(acExpiryRaw);
+    if (!storedMMYY || storedMMYY !== `${inExp.mm}/${inExp.yy}`) {
       return res.json({ ok: false, message: 'Expiration does not match contract.' });
     }
 
@@ -545,6 +555,7 @@ app.get('/admin/log-info', (_req, res) => {
   const candidates = [
     LOG_PRIMARY,
     LOG_FALLBACK,
+    // Extra historical names if ever used:
     path.join('/mnt/data', 'twist_webhook.txt'),
     path.join(__dirname, 'twist_webhook.txt'),
   ];
@@ -560,6 +571,7 @@ app.get('/admin/log-info', (_req, res) => {
   res.json({ candidates: info });
 });
 
+// Admin: show the latest log line that matches a phone (by last 10 digits)
 app.get('/admin/find-latest-by-phone', (_req, res) => {
   try {
     const phone = String(_req.query.phone || '');
@@ -577,7 +589,7 @@ app.get('/admin/find-latest-by-phone', (_req, res) => {
 
       const phones = phonesFromEntry(entry).map(p => p.replace(/\D/g, '').slice(-10)).filter(Boolean);
       if (phones.includes(target)) {
-        const tsStart = line.indexOf('[']);
+        const tsStart = line.indexOf('[');
         const tsEnd = line.indexOf(']');
         const timestamp = tsStart >= 0 && tsEnd > tsStart ? line.slice(tsStart + 1, tsEnd) : null;
         return res.json({ success: true, timestamp, entry });
