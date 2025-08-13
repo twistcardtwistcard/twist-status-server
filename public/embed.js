@@ -6,6 +6,8 @@
     "https://draecollection.com",
     "https://www.draecollection.com",
     "https://app.twistcard.ca"
+    "https://app.twistcard.ca"
+"https://pqwkcy-ek.myshopify.com"
     // add more: "https://staging.example.com"
   ];
 
