@@ -289,37 +289,64 @@ app.get('/check-latest', (req, res) => {
   if (!phone) return res.status(400).json({ success: false, message: 'Missing phone number' });
   if (!fs.existsSync(logFilePath)) return res.status(404).json({ success: false, message: 'No log file found' });
 
-  const lines = fs.readFileSync(logFilePath, 'utf-8')
-    .split('\n')
-    .filter(line => line.includes('/store-status:') && line.includes(phone));
-
-  if (lines.length === 0) return res.status(404).json({ success: false, message: 'No entries found for this phone number' });
-
-  const lastLine = lines[lines.length - 1];
-  const jsonMatch = lastLine.match(/{.*}/);
-  if (!jsonMatch) return res.status(500).json({ success: false, message: 'Failed to parse log entry' });
+  // Compare by last 10 digits to handle +1, spaces, dashes, etc.
+  const last10 = (v) => String(v || '').replace(/\D/g, '').slice(-10);
+  const qLast10 = last10(phone);
+  if (qLast10.length !== 10) {
+    return res.status(400).json({ success: false, message: 'Invalid phone format' });
+  }
 
   try {
-    const entry = JSON.parse(jsonMatch[0]);
+    const raw = fs.readFileSync(logFilePath, 'utf-8');
+    const lines = raw.split('\n').filter(line => line.includes('/store-status:')).reverse(); // newest -> oldest
 
-    const loanId = entry.loan_id;
-    const expiration = entry.contract_expiration;
-    let twistcode = null;
+    for (const line of lines) {
+      const jsonMatch = line.match(/{.*}/);
+      if (!jsonMatch) continue;
 
-    if (loanId && expiration && fs.existsSync(twistCodePath)) {
-      const hash = crypto.createHash('sha256').update(`${loanId}|${expiration}`).digest('hex');
-      const data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
-      twistcode = data[hash] || null;
+      let entry;
+      try { entry = JSON.parse(jsonMatch[0]); } catch { continue; }
+
+      const ePhones = [
+        entry.phone,
+        entry.customer_phone,
+        entry.customerPhone,
+        entry.contact_phone,
+      ];
+      const hasMatch = ePhones.some(p => last10(p) === qLast10);
+      if (!hasMatch) continue;
+
+      const loanId = entry.loan_id;
+      const expiration = entry.contract_expiration;
+      let twistcode = null;
+
+      if (loanId && expiration && fs.existsSync(twistCodePath)) {
+        try {
+          const hash = crypto.createHash('sha256').update(`${loanId}|${expiration}`).digest('hex');
+          const data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
+          twistcode = data[hash] || null;
+        } catch (e) {
+          console.error('check-latest code.json read error:', e);
+        }
+      }
+
+      // Timestamp from the log line header: [YYYY-MM-DDTHH:mm:ss.sssZ]
+      const tsStart = line.indexOf('[');
+      const tsEnd = line.indexOf(']');
+      const timestamp = tsStart >= 0 && tsEnd > tsStart ? line.slice(tsStart + 1, tsEnd) : null;
+
+      return res.json({
+        success: true,
+        transaction_id: entry.transaction_id || null,
+        timestamp,
+        code: twistcode
+      });
     }
 
-    return res.json({
-      transaction_id: entry.transaction_id,
-      timestamp: lastLine.substring(1, 20),
-      code: twistcode
-    });
-
+    return res.status(404).json({ success: false, message: 'No entries found for this phone number' });
   } catch (err) {
-    return res.status(500).json({ success: false, message: 'Error parsing log entry' });
+    console.error('check-latest error:', err);
+    return res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
@@ -334,13 +361,17 @@ app.get('/get-code', (req, res) => {
     return res.status(404).json({ success: false, message: 'code.json not found' });
   }
 
-  const data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
-  const twistcode = data[hash];
-  if (!twistcode) {
-    return res.status(404).json({ success: false, message: 'No twistcode found for this pair' });
+  try {
+    const data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
+    const twistcode = data[hash];
+    if (!twistcode) {
+      return res.status(404).json({ success: false, message: 'No twistcode found for this pair' });
+    }
+    res.json({ twistcode });
+  } catch (e) {
+    console.error('get-code parse error:', e);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
-
-  res.json({ twistcode });
 });
 
 /* ---------------- Boot ---------------- */
