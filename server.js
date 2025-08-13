@@ -40,7 +40,7 @@ const statuses = {}; // { transaction_id: 'pending'|'approved'|... }
  * Robust log handling:
  * - Primary path from env LOG_FILE_PATH or defaults to /mnt/data/webhook_logs.txt (persistent on Render)
  * - Fallback path in app directory ./webhook_logs.txt
- * - We "touch" the primary on boot; we can read from whichever exists/newest; we try writing to both.
+ * - Touch primary on boot; read from whichever exists/newest; write to both when possible.
  */
 const LOG_PRIMARY = process.env.LOG_FILE_PATH || path.join('/mnt/data', 'webhook_logs.txt');
 const LOG_FALLBACK = path.join(__dirname, 'webhook_logs.txt');
@@ -103,13 +103,17 @@ function normalizeMMYYFromStored(v) {
   if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return `${m[2]}/${m[1].slice(-2)}`; // YYYY-MM-DD -> MM/YY
   return null;
 }
+
+/**
+ * Scan newest→oldest lines in whichever log is present.
+ * Accept ANY line that contains a JSON object (old logs might not have "/store-status:" marker).
+ */
 async function readLatestPayloadByLoanIdEndsWith(last6) {
   try {
     const raw = readLogText();
     if (!raw) return null;
     const lines = raw.split('\n').filter(Boolean).reverse(); // newest -> oldest
     for (const line of lines) {
-      if (!line.includes('/store-status:')) continue;
       const jsonMatch = line.match(/{.*}/);
       if (!jsonMatch) continue;
       try {
@@ -121,6 +125,7 @@ async function readLatestPayloadByLoanIdEndsWith(last6) {
   } catch {}
   return null;
 }
+
 // Normalize Canadian numbers to E.164 (+1##########)
 function normE164CA(v) {
   const digits = String(v || '').replace(/\D/g, '');
@@ -322,6 +327,7 @@ app.get('/check-status', (req, res) => {
 /**
  * Robust "latest by phone" (newest → oldest), last-10-digit matching.
  * Returns entire twist code if found.
+ * NEW: Accept any JSON line (with or without "/store-status:").
  */
 app.get('/check-latest', (req, res) => {
   const { phone } = req.query;
@@ -336,7 +342,7 @@ app.get('/check-latest', (req, res) => {
   if (!raw) return res.status(404).json({ success: false, message: 'No log file found' });
 
   try {
-    const lines = raw.split('\n').filter(line => line.includes('/store-status:')).reverse();
+    const lines = raw.split('\n').filter(Boolean).reverse(); // NEW: accept any JSON line
 
     for (const line of lines) {
       const jsonMatch = line.match(/{.*}/);
@@ -385,6 +391,7 @@ app.get('/check-latest', (req, res) => {
 
 /**
  * Return middle 4 digits mapped from phone -> latest loan entry by scanning logs (newest → oldest).
+ * NEW: Accept any JSON line (with or without "/store-status:").
  */
 app.get('/code/middle4-by-phone', (req, res) => {
   try {
@@ -399,7 +406,7 @@ app.get('/code/middle4-by-phone', (req, res) => {
     const raw = readLogText();
     if (!raw) return res.status(404).json({ success: false, message: 'No log file found' });
 
-    const lines = raw.split('\n').filter(line => line.includes('/store-status:')).reverse();
+    const lines = raw.split('\n').filter(Boolean).reverse(); // NEW: accept any JSON line
 
     for (const line of lines) {
       const jsonMatch = line.match(/{.*}/);
@@ -482,7 +489,7 @@ app.get('/admin/log-info', (_req, res) => {
   const candidates = [
     LOG_PRIMARY,
     LOG_FALLBACK,
-    // If you historically used a different filename, list it here too:
+    // Extra historical names if ever used:
     path.join('/mnt/data', 'twist_webhook.txt'),
     path.join(__dirname, 'twist_webhook.txt'),
   ];
