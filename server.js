@@ -3,7 +3,6 @@ const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
 const fs = require('fs');
-const fsPromises = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 
@@ -40,7 +39,8 @@ const statuses = {}; // { transaction_id: 'pending'|'approved'|... }
  * Robust log handling:
  * - Primary path from env LOG_FILE_PATH or defaults to /mnt/data/webhook_logs.txt (persistent on Render)
  * - Fallback path in app directory ./webhook_logs.txt
- * - Touch primary on boot; read from whichever exists/newest; write to both when possible.
+ * - Touch primary on boot; write to both when possible.
+ * - NEW: reader merges BOTH logs and sorts newest→oldest by timestamp.
  */
 const LOG_PRIMARY = process.env.LOG_FILE_PATH || path.join('/mnt/data', 'webhook_logs.txt');
 const LOG_FALLBACK = path.join(__dirname, 'webhook_logs.txt');
@@ -59,17 +59,39 @@ function logWrite(line) {
   try { fs.appendFileSync(LOG_PRIMARY, line); } catch (e) { console.error('write primary failed', e); }
   try { fs.appendFileSync(LOG_FALLBACK, line); } catch (_) { /* ignore fallback write errors */ }
 }
-function readLogText() {
-  const candidates = [];
-  try { if (fs.existsSync(LOG_PRIMARY)) candidates.push({ p: LOG_PRIMARY, s: fs.statSync(LOG_PRIMARY).size, m: fs.statSync(LOG_PRIMARY).mtimeMs }); } catch {}
-  try { if (fs.existsSync(LOG_FALLBACK)) candidates.push({ p: LOG_FALLBACK, s: fs.statSync(LOG_FALLBACK).size, m: fs.statSync(LOG_FALLBACK).mtimeMs }); } catch {}
-  if (candidates.length === 0) return null;
-  candidates.sort((a, b) => b.m - a.m);
-  const chosen = candidates.find(c => c.s > 0) || candidates[0];
-  try { return fs.readFileSync(chosen.p, 'utf-8'); } catch (e) {
-    console.error('readLogText error:', e);
-    return null;
+
+/**
+ * Read and MERGE lines from both logs (if present), sorted newest→oldest.
+ * It uses the timestamp between '[' and ']' if present, else preserves relative order.
+ */
+function readMergedLogText() {
+  const files = [];
+  try { if (fs.existsSync(LOG_PRIMARY)) files.push(LOG_PRIMARY); } catch {}
+  try { if (fs.existsSync(LOG_FALLBACK)) files.push(LOG_FALLBACK); } catch {}
+  if (files.length === 0) return null;
+
+  let lines = [];
+  for (const p of files) {
+    try {
+      const raw = fs.readFileSync(p, 'utf-8');
+      if (raw && raw.length) lines.push(...raw.trimEnd().split('\n').filter(Boolean));
+    } catch (e) {}
   }
+  if (!lines.length) return null;
+
+  const withIndex = lines.map((line, idx) => {
+    const s = line.indexOf('[');
+    const e = line.indexOf(']');
+    const ts = (s >= 0 && e > s) ? Date.parse(line.slice(s + 1, e)) : NaN;
+    return { line, idx, ts: isNaN(ts) ? null : ts };
+  });
+
+  withIndex.sort((a, b) => {
+    if (a.ts !== null && b.ts !== null && a.ts !== b.ts) return b.ts - a.ts; // newer first
+    return a.idx - b.idx; // stable fallback
+  });
+
+  return withIndex.map(x => x.line).join('\n');
 }
 
 /* ---------------- Helpers ---------------- */
@@ -148,14 +170,14 @@ function findTwistByLoanAndExpVariants(loanId, expiration, codeMap) {
 }
 
 /**
- * Scan newest→oldest lines in whichever log is present.
+ * Scan newest→oldest across MERGED logs.
  * Accept ANY line that contains a JSON object (old logs might not have "/store-status:" marker).
  */
 async function readLatestPayloadByLoanIdEndsWith(last6) {
   try {
-    const raw = readLogText();
+    const raw = readMergedLogText();
     if (!raw) return null;
-    const lines = raw.split('\n').filter(Boolean).reverse(); // newest -> oldest
+    const lines = raw.split('\n').filter(Boolean);
     for (const line of lines) {
       const jsonMatch = line.match(/{.*}/);
       if (!jsonMatch) continue;
@@ -371,6 +393,7 @@ app.get('/check-status', (req, res) => {
  * Returns entire twist code if found.
  * Accepts any JSON line (with or without "/store-status:") and any phone-like field.
  * Normalizes expiration to hit code.json.
+ * Searches across BOTH logs.
  */
 app.get('/check-latest', (req, res) => {
   const { phone } = req.query;
@@ -381,11 +404,11 @@ app.get('/check-latest', (req, res) => {
     return res.status(400).json({ success: false, message: 'Invalid phone format' });
   }
 
-  const raw = readLogText();
+  const raw = readMergedLogText();
   if (!raw) return res.status(404).json({ success: false, message: 'No log file found' });
 
   try {
-    const lines = raw.split('\n').filter(Boolean).reverse();
+    const lines = raw.split('\n').filter(Boolean);
 
     for (const line of lines) {
       const jsonMatch = line.match(/{.*}/);
@@ -435,6 +458,7 @@ app.get('/check-latest', (req, res) => {
 /**
  * Return middle 4 digits mapped from phone -> latest loan entry by scanning logs (newest → oldest).
  * Accepts any JSON line and any phone-like field; normalizes expiration for code.json lookup.
+ * Searches across BOTH logs.
  */
 app.get('/code/middle4-by-phone', (req, res) => {
   try {
@@ -446,10 +470,10 @@ app.get('/code/middle4-by-phone', (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid phone format' });
     }
 
-    const raw = readLogText();
+    const raw = readMergedLogText();
     if (!raw) return res.status(404).json({ success: false, message: 'No log file found' });
 
-    const lines = raw.split('\n').filter(Boolean).reverse();
+    const lines = raw.split('\n').filter(Boolean);
 
     for (const line of lines) {
       const jsonMatch = line.match(/{.*}/);
@@ -554,12 +578,13 @@ app.get('/admin/find-latest-by-phone', (_req, res) => {
     const target = phone.replace(/\D/g, '').slice(-10);
     if (target.length !== 10) return res.status(400).json({ success: false, message: 'Invalid phone' });
 
-    const raw = readLogText();
+    const raw = readMergedLogText();
     if (!raw) return res.status(404).json({ success: false, message: 'No log file found' });
 
-    const lines = raw.split('\n').filter(Boolean).reverse(); // newest → oldest
+    const lines = raw.split('\n').filter(Boolean);
     for (const line of lines) {
-      const m = line.match(/{.*}/); if (!m) continue;
+      const m = line.match(/{.*}/);
+      if (!m) continue;
       let entry; try { entry = JSON.parse(m[0]); } catch { continue; }
 
       const phones = phonesFromEntry(entry).map(p => p.replace(/\D/g, '').slice(-10)).filter(Boolean);
