@@ -35,8 +35,43 @@ app.use((req, res, next) => {
 
 /* ---------------- In-memory status + paths ---------------- */
 const statuses = {}; // { transaction_id: 'pending'|'approved'|... }
-const logFilePath = path.join(__dirname, 'webhook_logs.txt');
+
+// Prefer /mnt/data for persistence; also support app directory as fallback
+const LOG_PRIMARY = process.env.LOG_FILE_PATH || path.join('/mnt/data', 'webhook_logs.txt');
+const LOG_FALLBACK = path.join(__dirname, 'webhook_logs.txt');
 const twistCodePath = path.join('/mnt/data', 'code.json');
+
+// Ensure primary log file exists (touch)
+try {
+  fs.mkdirSync(path.dirname(LOG_PRIMARY), { recursive: true });
+  fs.closeSync(fs.openSync(LOG_PRIMARY, 'a'));
+} catch (e) {
+  console.error('Unable to touch primary log file:', LOG_PRIMARY, e);
+}
+
+/* ---- Log helpers: read from the newest available log; write to both if possible ---- */
+function logWrite(line) {
+  try { fs.appendFileSync(LOG_PRIMARY, line); } catch (e) { console.error('write primary failed', e); }
+  try { fs.appendFileSync(LOG_FALLBACK, line); } catch (e) { /* fallback may not exist; ignore */ }
+}
+function logExists() {
+  return fs.existsSync(LOG_PRIMARY) || fs.existsSync(LOG_FALLBACK);
+}
+function readLogText() {
+  const candidates = []
+    .concat(fs.existsSync(LOG_PRIMARY) ? [{ p: LOG_PRIMARY, m: fs.statSync(LOG_PRIMARY).mtimeMs, s: fs.statSync(LOG_PRIMARY).size }] : [])
+    .concat(fs.existsSync(LOG_FALLBACK) ? [{ p: LOG_FALLBACK, m: fs.statSync(LOG_FALLBACK).mtimeMs, s: fs.statSync(LOG_FALLBACK).size }] : []);
+  if (candidates.length === 0) return null;
+  // prefer the most recently modified file with content, else any existing
+  candidates.sort((a, b) => b.m - a.m);
+  const chosen = candidates.find(c => c.s > 0) || candidates[0];
+  try {
+    return fs.readFileSync(chosen.p, 'utf-8');
+  } catch (e) {
+    console.error('readLogText error:', e);
+    return null;
+  }
+}
 
 /* ---------------- Helpers ---------------- */
 function getOrGenerateTwistCode(loanId, expiration) {
@@ -55,7 +90,7 @@ function getOrGenerateTwistCode(loanId, expiration) {
 }
 function middle4Of(code12) {
   if (!code12 || String(code12).length < 12) return null;
-  return String(code12).slice(4, 8); // digits 5–8
+  return String(code12).slice(4, 8);
 }
 function parseMMYY(mmYY) {
   const m = String(mmYY || '').match(/^(\d{2})\/(\d{2})$/);
@@ -65,14 +100,14 @@ function normalizeMMYYFromStored(v) {
   if (!v) return null;
   const s = String(v);
   let m;
-  if ((m = s.match(/^(\d{2})\/(\d{2})$/))) return `${m[1]}/${m[2]}`;                 // MM/YY
-  if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return `${m[2]}/${m[1].slice(-2)}`; // YYYY-MM-DD -> MM/YY
+  if ((m = s.match(/^(\d{2})\/(\d{2})$/))) return `${m[1]}/${m[2]}`;
+  if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return `${m[2]}/${m[1].slice(-2)}`;
   return null;
 }
 async function readLatestPayloadByLoanIdEndsWith(last6) {
   try {
-    if (!fs.existsSync(logFilePath)) return null;
-    const raw = await fsPromises.readFile(logFilePath, 'utf8');
+    const raw = readLogText();
+    if (!raw) return null;
     const lines = raw.split('\n').filter(Boolean).reverse();
     for (const line of lines) {
       if (!line.includes('/store-status:')) continue;
@@ -93,7 +128,6 @@ function normE164CA(v) {
   const last10 = digits.slice(-10);
   return last10.length === 10 ? `+1${last10}` : null;
 }
-// Phone helper: compare by last 10 digits
 const last10 = (v) => String(v || '').replace(/\D/g, '').slice(-10);
 
 /* ---------------- PRE-VALIDATE (rules + OTP) ---------------- */
@@ -113,17 +147,14 @@ app.post('/pre-validate', async (req, res) => {
       otpCode
     } = req.body || {};
 
-    // Presence
     if (!transaction_id || !orderno || !amount || !cardNumber || !expiration || !twist || !email || !phone || !postal || !otpCode) {
       return res.status(400).json({ ok: false, message: 'Missing required fields.' });
     }
 
-    // Card checks
     const cleanCard = String(cardNumber).replace(/\D/g, '');
     if (!cleanCard.startsWith('71461567')) return res.json({ ok: false, message: 'Card prefix invalid.' });
     if (cleanCard.length !== 16) return res.json({ ok: false, message: 'Card length invalid.' });
 
-    // Map last 6 -> latest payload for that loan
     const last6 = cleanCard.slice(-6);
     const latest = await readLatestPayloadByLoanIdEndsWith(last6);
     if (!latest) return res.json({ ok: false, message: 'No matching loan found.' });
@@ -133,33 +164,28 @@ app.post('/pre-validate', async (req, res) => {
     const acPhone = String(latest.phone || latest.customer_phone || '').replace(/[^\d]/g, '');
     const acPostal = String(latest.postal_code || latest.postal || '').trim().toUpperCase();
     const acAvail = Number(latest.available_credit || 0);
-    const acExpiryRaw = String(latest.contract_expiration || ''); // may be MM/YY or YYYY-MM-DD
+    const acExpiryRaw = String(latest.contract_expiration || '');
 
-    // Email
     if (acEmail && String(email).trim().toLowerCase() !== acEmail) {
       return res.json({ ok: false, message: 'Email does not match account.' });
     }
 
-    // Phone (last 10)
     const inPhoneDigits = String(phone).replace(/[^\d]/g, '');
     if (acPhone && inPhoneDigits.slice(-10) !== acPhone.slice(-10)) {
       return res.json({ ok: false, message: 'Phone does not match account.' });
     }
 
-    // Postal
     const inPostal = String(postal).trim().toUpperCase().replace(/\s/g, '');
     const refPostal = acPostal.replace(/\s/g, '');
     if (acPostal && inPostal !== refPostal) {
       return res.json({ ok: false, message: 'Postal code does not match account.' });
     }
 
-    // Amount <= available_credit
     const amt = Number(String(amount).replace(/[^\d.]/g, ''));
     if (Number.isFinite(acAvail) && Number.isFinite(amt) && amt > acAvail) {
       return res.json({ ok: false, message: 'Amount exceeds available credit.' });
     }
 
-    // Expiration match
     const inExp = parseMMYY(expiration);
     if (!inExp) return res.json({ ok: false, message: 'Expiration format invalid.' });
     const storedMMYY = normalizeMMYYFromStored(acExpiryRaw);
@@ -167,7 +193,6 @@ app.post('/pre-validate', async (req, res) => {
       return res.json({ ok: false, message: 'Expiration does not match contract.' });
     }
 
-    // TWIST middle 4 (code.json uses hash(loan_id|contract_expiration))
     let twistMap = {};
     if (fs.existsSync(twistCodePath)) {
       try { twistMap = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8')); } catch {}
@@ -179,7 +204,6 @@ app.post('/pre-validate', async (req, res) => {
       return res.json({ ok: false, message: 'TWIST code incorrect.' });
     }
 
-    // OTP verification (server-side) with normalized phone
     const normPhone = normE164CA(phone);
     if (!normPhone) return res.json({ ok: false, message: 'Phone format invalid.' });
     const otpResp = await fetch('https://twilio-otp-server.onrender.com/verify-otp', {
@@ -192,9 +216,7 @@ app.post('/pre-validate', async (req, res) => {
       return res.json({ ok: false, message: 'OTP invalid or expired.' });
     }
 
-    // Mark as pending so client polling works without exposing GET key
     statuses[transaction_id] = 'pending';
-
     return res.json({ ok: true, message: 'Validated', loan_id: loanId });
   } catch (e) {
     console.error('pre-validate error:', e);
@@ -222,7 +244,7 @@ app.post('/store-status', async (req, res) => {
     limit,
     phone,
     code,
-    product_description // optional
+    product_description
   } = req.body;
 
   if (!transaction_id || !status) {
@@ -232,11 +254,10 @@ app.post('/store-status', async (req, res) => {
   const timestamp = new Date().toISOString();
   const logEntry = `[${timestamp}] Incoming POST /store-status: ${JSON.stringify(req.body)}\n`;
   console.log(logEntry);
-  fs.appendFileSync(logFilePath, logEntry);
+  logWrite(logEntry); // <-- write to both logs
 
   statuses[transaction_id] = status;
 
-  // Optional: sync to ActiveCampaign
   if (email) {
     const fieldValues = [];
     if (typeof available_credit !== 'undefined') fieldValues.push({ field: 78, value: available_credit });
@@ -258,7 +279,6 @@ app.post('/store-status', async (req, res) => {
     }
   }
 
-  // Ensure a twistcode exists
   if (loan_id && contract_expiration) {
     getOrGenerateTwistCode(loan_id, contract_expiration);
   }
@@ -293,30 +313,27 @@ app.get('/check-status', (req, res) => {
 app.get('/check-latest', (req, res) => {
   const { phone } = req.query;
   if (!phone) return res.status(400).json({ success: false, message: 'Missing phone number' });
-  if (!fs.existsSync(logFilePath)) return res.status(404).json({ success: false, message: 'No log file found' });
 
   const qLast10 = last10(phone);
   if (qLast10.length !== 10) {
     return res.status(400).json({ success: false, message: 'Invalid phone format' });
   }
 
+  const raw = readLogText();
+  if (!raw) {
+    return res.status(404).json({ success: false, message: 'No log file found' });
+  }
+
   try {
-    const raw = fs.readFileSync(logFilePath, 'utf-8');
-    const lines = raw.split('\n').filter(line => line.includes('/store-status:')).reverse(); // newest -> oldest
+    const lines = raw.split('\n').filter(line => line.includes('/store-status:')).reverse();
 
     for (const line of lines) {
       const jsonMatch = line.match(/{.*}/);
       if (!jsonMatch) continue;
-
       let entry;
       try { entry = JSON.parse(jsonMatch[0]); } catch { continue; }
 
-      const ePhones = [
-        entry.phone,
-        entry.customer_phone,
-        entry.customerPhone,
-        entry.contact_phone,
-      ];
+      const ePhones = [entry.phone, entry.customer_phone, entry.customerPhone, entry.contact_phone];
       const hasMatch = ePhones.some(p => last10(p) === qLast10);
       if (!hasMatch) continue;
 
@@ -334,7 +351,6 @@ app.get('/check-latest', (req, res) => {
         }
       }
 
-      // Timestamp from the log line header: [YYYY-MM-DDTHH:mm:ss.sssZ]
       const tsStart = line.indexOf('[');
       const tsEnd = line.indexOf(']');
       const timestamp = tsStart >= 0 && tsEnd > tsStart ? line.slice(tsStart + 1, tsEnd) : null;
@@ -346,7 +362,6 @@ app.get('/check-latest', (req, res) => {
         code: twistcode
       });
     }
-
     return res.status(404).json({ success: false, message: 'No entries found for this phone number' });
   } catch (err) {
     console.error('check-latest error:', err);
@@ -355,22 +370,23 @@ app.get('/check-latest', (req, res) => {
 });
 
 /**
- * NEW (simplified): Return middle 4 digits mapped from phone -> latest loan entry
- * by scanning existing webhook_logs.txt (newest → oldest).
+ * Return middle 4 digits mapped from phone -> latest loan entry by scanning logs.
  */
 app.get('/code/middle4-by-phone', (req, res) => {
   try {
     const { phone } = req.query;
     if (!phone) return res.status(400).json({ success: false, message: 'Missing phone' });
-    if (!fs.existsSync(logFilePath)) return res.status(404).json({ success: false, message: 'No log file found' });
 
     const qLast10 = last10(phone);
     if (qLast10.length !== 10) {
       return res.status(400).json({ success: false, message: 'Invalid phone format' });
     }
 
-    // Read logs newest → oldest
-    const raw = fs.readFileSync(logFilePath, 'utf-8');
+    const raw = readLogText();
+    if (!raw) {
+      return res.status(404).json({ success: false, message: 'No log file found' });
+    }
+
     const lines = raw.split('\n').filter(line => line.includes('/store-status:')).reverse();
 
     for (const line of lines) {
@@ -380,19 +396,12 @@ app.get('/code/middle4-by-phone', (req, res) => {
       let entry;
       try { entry = JSON.parse(jsonMatch[0]); } catch { continue; }
 
-      const ePhones = [
-        entry.phone,
-        entry.customer_phone,
-        entry.customerPhone,
-        entry.contact_phone,
-      ].filter(Boolean);
-
+      const ePhones = [entry.phone, entry.customer_phone, entry.customerPhone, entry.contact_phone].filter(Boolean);
       const matched = ePhones.some(p => last10(p) === qLast10);
       if (!matched) continue;
 
       const loanId = entry.loan_id || null;
       const expiration = entry.contract_expiration || null;
-
       if (!loanId || !expiration) continue;
 
       if (!fs.existsSync(twistCodePath)) {
@@ -408,18 +417,11 @@ app.get('/code/middle4-by-phone', (req, res) => {
         }
         const middle4 = String(twistcode).slice(4, 8);
 
-        // Extract timestamp from log line
         const tsStart = line.indexOf('[');
         const tsEnd = line.indexOf(']');
         const timestamp = tsStart >= 0 && tsEnd > tsStart ? line.slice(tsStart + 1, tsEnd) : null;
 
-        return res.json({
-          success: true,
-          middle4,
-          loan_id: loanId,
-          contract_expiration: expiration,
-          timestamp
-        });
+        return res.json({ success: true, middle4, loan_id: loanId, contract_expiration: expiration, timestamp });
       } catch (e) {
         console.error('middle4-by-phone error:', e);
         return res.status(500).json({ success: false, message: 'Server error' });
