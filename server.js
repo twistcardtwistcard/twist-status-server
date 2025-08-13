@@ -104,6 +104,49 @@ function normalizeMMYYFromStored(v) {
   return null;
 }
 
+/* --------- Phone + expiration utilities for resilient matching --------- */
+// collect all phone-like fields from a log entry
+function phonesFromEntry(entry) {
+  if (!entry || typeof entry !== 'object') return [];
+  const out = [];
+  for (const [k, v] of Object.entries(entry)) {
+    if (/phone/i.test(k) && typeof v === 'string') out.push(v);
+  }
+  return out;
+}
+// last 10 digits comparator
+const last10 = (v) => String(v || '').replace(/\D/g, '').slice(-10);
+// normalize expiration into multiple candidate formats
+function expCandidates(v) {
+  const s = String(v || '').trim();
+  const out = new Set();
+  if (s) out.add(s); // raw
+
+  // MM/YY
+  let m = s.match(/^(\d{2})\/(\d{2})$/);
+  if (m) { out.add(`${m[1]}${m[2]}`); out.add(`${m[1]}/${m[2]}`); }
+
+  // MMYY
+  if (/^\d{4}$/.test(s)) { out.add(s); out.add(`${s.slice(0,2)}/${s.slice(2)}`); }
+
+  // YYYY-MM-DD
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    out.add(`${m[2]}${m[1].slice(-2)}`);   // MMYY
+    out.add(`${m[2]}/${m[1].slice(-2)}`);  // MM/YY
+    out.add(s);                            // raw
+  }
+  return Array.from(out);
+}
+function findTwistByLoanAndExpVariants(loanId, expiration, codeMap) {
+  if (!loanId || !expiration || !codeMap) return null;
+  for (const exp of expCandidates(expiration)) {
+    const hash = crypto.createHash('sha256').update(`${loanId}|${exp}`).digest('hex');
+    if (codeMap[hash]) return { twistcode: codeMap[hash], usedExpiration: exp };
+  }
+  return null;
+}
+
 /**
  * Scan newest→oldest lines in whichever log is present.
  * Accept ANY line that contains a JSON object (old logs might not have "/store-status:" marker).
@@ -132,7 +175,6 @@ function normE164CA(v) {
   const l10 = digits.slice(-10);
   return l10.length === 10 ? `+1${l10}` : null;
 }
-const last10 = (v) => String(v || '').replace(/\D/g, '').slice(-10);
 
 /* ---------------- PRE-VALIDATE (rules + OTP) ---------------- */
 app.post('/pre-validate', async (req, res) => {
@@ -327,7 +369,8 @@ app.get('/check-status', (req, res) => {
 /**
  * Robust "latest by phone" (newest → oldest), last-10-digit matching.
  * Returns entire twist code if found.
- * NEW: Accept any JSON line (with or without "/store-status:").
+ * Accepts any JSON line (with or without "/store-status:") and any phone-like field.
+ * Normalizes expiration to hit code.json.
  */
 app.get('/check-latest', (req, res) => {
   const { phone } = req.query;
@@ -342,7 +385,7 @@ app.get('/check-latest', (req, res) => {
   if (!raw) return res.status(404).json({ success: false, message: 'No log file found' });
 
   try {
-    const lines = raw.split('\n').filter(Boolean).reverse(); // NEW: accept any JSON line
+    const lines = raw.split('\n').filter(Boolean).reverse();
 
     for (const line of lines) {
       const jsonMatch = line.match(/{.*}/);
@@ -351,7 +394,7 @@ app.get('/check-latest', (req, res) => {
       let entry;
       try { entry = JSON.parse(jsonMatch[0]); } catch { continue; }
 
-      const ePhones = [entry.phone, entry.customer_phone, entry.customerPhone, entry.contact_phone];
+      const ePhones = phonesFromEntry(entry);
       const hasMatch = ePhones.some(p => last10(p) === qLast10);
       if (!hasMatch) continue;
 
@@ -361,9 +404,9 @@ app.get('/check-latest', (req, res) => {
 
       if (loanId && expiration && fs.existsSync(twistCodePath)) {
         try {
-          const hash = crypto.createHash('sha256').update(`${loanId}|${expiration}`).digest('hex');
           const data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
-          twistcode = data[hash] || null;
+          const hit = findTwistByLoanAndExpVariants(loanId, expiration, data);
+          twistcode = hit ? hit.twistcode : null;
         } catch (e) {
           console.error('check-latest code.json read error:', e);
         }
@@ -391,7 +434,7 @@ app.get('/check-latest', (req, res) => {
 
 /**
  * Return middle 4 digits mapped from phone -> latest loan entry by scanning logs (newest → oldest).
- * NEW: Accept any JSON line (with or without "/store-status:").
+ * Accepts any JSON line and any phone-like field; normalizes expiration for code.json lookup.
  */
 app.get('/code/middle4-by-phone', (req, res) => {
   try {
@@ -406,7 +449,7 @@ app.get('/code/middle4-by-phone', (req, res) => {
     const raw = readLogText();
     if (!raw) return res.status(404).json({ success: false, message: 'No log file found' });
 
-    const lines = raw.split('\n').filter(Boolean).reverse(); // NEW: accept any JSON line
+    const lines = raw.split('\n').filter(Boolean).reverse();
 
     for (const line of lines) {
       const jsonMatch = line.match(/{.*}/);
@@ -415,7 +458,7 @@ app.get('/code/middle4-by-phone', (req, res) => {
       let entry;
       try { entry = JSON.parse(jsonMatch[0]); } catch { continue; }
 
-      const ePhones = [entry.phone, entry.customer_phone, entry.customerPhone, entry.contact_phone].filter(Boolean);
+      const ePhones = phonesFromEntry(entry);
       const matched = ePhones.some(p => last10(p) === qLast10);
       if (!matched) continue;
 
@@ -429,12 +472,11 @@ app.get('/code/middle4-by-phone', (req, res) => {
 
       try {
         const data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
-        const hash = crypto.createHash('sha256').update(`${loanId}|${expiration}`).digest('hex');
-        const twistcode = data[hash] || null;
-        if (!twistcode) {
-          return res.status(404).json({ success: false, message: 'No twistcode for this loan' });
+        const hit = findTwistByLoanAndExpVariants(loanId, expiration, data);
+        if (!hit) {
+          return res.status(404).json({ success: false, message: 'No twistcode for this loan/expiration' });
         }
-        const middle4 = String(twistcode).slice(4, 8);
+        const middle4 = String(hit.twistcode).slice(4, 8);
 
         const tsStart = line.indexOf('[');
         const tsEnd = line.indexOf(']');
@@ -444,7 +486,7 @@ app.get('/code/middle4-by-phone', (req, res) => {
           success: true,
           middle4,
           loan_id: loanId,
-          contract_expiration: expiration,
+          contract_expiration: hit.usedExpiration,
           timestamp
         });
       } catch (e) {
@@ -484,7 +526,7 @@ app.get('/get-code', (req, res) => {
   }
 });
 
-/* ---------------- Admin (GET-key protected): inspect log locations ---------------- */
+/* ---------------- Admin (GET-key protected): inspect/diagnose ---------------- */
 app.get('/admin/log-info', (_req, res) => {
   const candidates = [
     LOG_PRIMARY,
@@ -503,6 +545,36 @@ app.get('/admin/log-info', (_req, res) => {
     }
   });
   res.json({ candidates: info });
+});
+
+// Admin: show the latest log line that matches a phone (by last 10 digits)
+app.get('/admin/find-latest-by-phone', (_req, res) => {
+  try {
+    const phone = String(_req.query.phone || '');
+    const target = phone.replace(/\D/g, '').slice(-10);
+    if (target.length !== 10) return res.status(400).json({ success: false, message: 'Invalid phone' });
+
+    const raw = readLogText();
+    if (!raw) return res.status(404).json({ success: false, message: 'No log file found' });
+
+    const lines = raw.split('\n').filter(Boolean).reverse(); // newest → oldest
+    for (const line of lines) {
+      const m = line.match(/{.*}/); if (!m) continue;
+      let entry; try { entry = JSON.parse(m[0]); } catch { continue; }
+
+      const phones = phonesFromEntry(entry).map(p => p.replace(/\D/g, '').slice(-10)).filter(Boolean);
+      if (phones.includes(target)) {
+        const tsStart = line.indexOf('[');
+        const tsEnd = line.indexOf(']');
+        const timestamp = tsStart >= 0 && tsEnd > tsStart ? line.slice(tsStart + 1, tsEnd) : null;
+        return res.json({ success: true, timestamp, entry });
+      }
+    }
+    return res.status(404).json({ success: false, message: 'No matching line found for that phone' });
+  } catch (e) {
+    console.error('find-latest-by-phone error:', e);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
 });
 
 /* ---------------- Boot ---------------- */
