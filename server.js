@@ -40,7 +40,7 @@ const statuses = {}; // { transaction_id: 'pending'|'approved'|... }
  * - Primary path from env LOG_FILE_PATH or defaults to /mnt/data/webhook_logs.txt (persistent on Render)
  * - Fallback path in app directory ./webhook_logs.txt
  * - Touch primary on boot; write to both when possible.
- * - NEW: reader merges BOTH logs and sorts newest→oldest by timestamp.
+ * - Reader merges BOTH logs and sorts newest→oldest by timestamp.
  */
 const LOG_PRIMARY = process.env.LOG_FILE_PATH || path.join('/mnt/data', 'webhook_logs.txt');
 const LOG_FALLBACK = path.join(__dirname, 'webhook_logs.txt');
@@ -82,8 +82,9 @@ function readMergedLogText() {
   const withIndex = lines.map((line, idx) => {
     const s = line.indexOf('[');
     const e = line.indexOf(']');
-    const ts = (s >= 0 && e > s) ? Date.parse(line.slice(s + 1, e)) : NaN;
-    return { line, idx, ts: isNaN(ts) ? null : ts };
+    theTs = (s >= 0 && e > s) ? Date.parse(line.slice(s + 1, e)) : NaN; // eslint-disable-line no-undef
+    const ts = isNaN(theTs) ? null : theTs;
+    return { line, idx, ts };
   });
 
   withIndex.sort((a, b) => {
@@ -125,7 +126,6 @@ function normalizeMMYYFromStored(v) {
   if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return `${m[2]}/${m[1].slice(-2)}`; // YYYY-MM-DD -> MM/YY
   return null;
 }
-
 // Convert any supported expiration format to MMYY (digits only)
 function toMMYY(raw) {
   const s = String(raw || '').trim();
@@ -208,6 +208,40 @@ function normE164CA(v) {
   return l10.length === 10 ? `+1${l10}` : null;
 }
 
+/* ---------------- OTP verify proxy + cache (so Verify button doesn't consume it twice) ---------------- */
+const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const otpCache = new Map(); // key: `${phone}|${code}` -> timestamp
+
+function setOtpVerified(phone, code) {
+  otpCache.set(`${phone}|${code}`, Date.now());
+}
+function wasOtpVerifiedRecently(phone, code) {
+  const ts = otpCache.get(`${phone}|${code}`);
+  return !!ts && (Date.now() - ts) < OTP_TTL_MS;
+}
+
+// UI calls this instead of the Twilio verify endpoint directly
+app.post('/otp/verify-proxy', async (req, res) => {
+  try {
+    const { phone, code } = req.body || {};
+    const normPhone = normE164CA(phone);
+    if (!normPhone || !/^\d{6}$/.test(String(code || ''))) {
+      return res.status(400).json({ success: false, message: 'Invalid phone or code' });
+    }
+    const r = await fetch('https://twilio-otp-server.onrender.com/verify-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: normPhone, code: String(code) })
+    });
+    const j = await r.json().catch(() => null);
+    if (j && j.success) setOtpVerified(normPhone, String(code));
+    return res.json(j || { success: false, message: 'OTP server error' });
+  } catch (e) {
+    console.error('verify-proxy error', e);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 /* ---------------- PRE-VALIDATE (rules + OTP) ---------------- */
 app.post('/pre-validate', async (req, res) => {
   try {
@@ -272,12 +306,12 @@ app.post('/pre-validate', async (req, res) => {
       return res.json({ ok: false, message: 'Amount exceeds available credit.' });
     }
 
-    // Expiration match (UPDATED: form sends MMYY; compare as MMYY)
-    const inExpMMYY = toMMYY(expiration);      // expect MMYY from the form
+    // Expiration match (form sends MMYY; compare as MMYY)
+    const inExpMMYY = toMMYY(expiration);
     if (!inExpMMYY) {
       return res.json({ ok: false, message: 'Expiration format invalid (MMYY).' });
     }
-    const storedMMYY = toMMYY(acExpiryRaw);    // accept MM/YY, YYYY-MM-DD, or MMYY from logs
+    const storedMMYY = toMMYY(acExpiryRaw);
     if (!storedMMYY || storedMMYY !== inExpMMYY) {
       return res.json({ ok: false, message: 'Expiration does not match contract.' });
     }
@@ -294,16 +328,27 @@ app.post('/pre-validate', async (req, res) => {
       return res.json({ ok: false, message: 'TWIST code incorrect.' });
     }
 
-    // OTP verification (server-side) with normalized phone
+    // OTP verification (server-side) with cache to avoid re-consuming
     const normPhone = normE164CA(phone);
     if (!normPhone) return res.json({ ok: false, message: 'Phone format invalid.' });
-    const otpResp = await fetch('https://twilio-otp-server.onrender.com/verify-otp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: normPhone, code: otpCode })
-    });
-    const otpData = await otpResp.json().catch(() => null);
-    if (!otpData || !otpData.success) {
+
+    const codeStr = String(otpCode || '');
+    let otpOk = false;
+
+    if (wasOtpVerifiedRecently(normPhone, codeStr)) {
+      otpOk = true;
+    } else {
+      const otpResp = await fetch('https://twilio-otp-server.onrender.com/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: normPhone, code: codeStr })
+      });
+      const otpData = await otpResp.json().catch(() => null);
+      otpOk = !!(otpData && otpData.success);
+      if (otpOk) setOtpVerified(normPhone, codeStr);
+    }
+
+    if (!otpOk) {
       return res.json({ ok: false, message: 'OTP invalid or expired.' });
     }
 
