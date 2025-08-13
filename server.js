@@ -36,12 +36,17 @@ app.use((req, res, next) => {
 /* ---------------- In-memory status + paths ---------------- */
 const statuses = {}; // { transaction_id: 'pending'|'approved'|... }
 
-// Prefer /mnt/data for persistence; also support app directory as fallback
+/**
+ * Robust log handling:
+ * - Primary path from env LOG_FILE_PATH or defaults to /mnt/data/webhook_logs.txt (persistent on Render)
+ * - Fallback path in app directory ./webhook_logs.txt
+ * - We "touch" the primary on boot; we can read from whichever exists/newest; we try writing to both.
+ */
 const LOG_PRIMARY = process.env.LOG_FILE_PATH || path.join('/mnt/data', 'webhook_logs.txt');
 const LOG_FALLBACK = path.join(__dirname, 'webhook_logs.txt');
 const twistCodePath = path.join('/mnt/data', 'code.json');
 
-// Ensure primary log file exists (touch)
+// Ensure primary log exists (touch)
 try {
   fs.mkdirSync(path.dirname(LOG_PRIMARY), { recursive: true });
   fs.closeSync(fs.openSync(LOG_PRIMARY, 'a'));
@@ -49,25 +54,19 @@ try {
   console.error('Unable to touch primary log file:', LOG_PRIMARY, e);
 }
 
-/* ---- Log helpers: read from the newest available log; write to both if possible ---- */
+/* ---- Log helpers ---- */
 function logWrite(line) {
   try { fs.appendFileSync(LOG_PRIMARY, line); } catch (e) { console.error('write primary failed', e); }
-  try { fs.appendFileSync(LOG_FALLBACK, line); } catch (e) { /* fallback may not exist; ignore */ }
-}
-function logExists() {
-  return fs.existsSync(LOG_PRIMARY) || fs.existsSync(LOG_FALLBACK);
+  try { fs.appendFileSync(LOG_FALLBACK, line); } catch (_) { /* ignore fallback write errors */ }
 }
 function readLogText() {
-  const candidates = []
-    .concat(fs.existsSync(LOG_PRIMARY) ? [{ p: LOG_PRIMARY, m: fs.statSync(LOG_PRIMARY).mtimeMs, s: fs.statSync(LOG_PRIMARY).size }] : [])
-    .concat(fs.existsSync(LOG_FALLBACK) ? [{ p: LOG_FALLBACK, m: fs.statSync(LOG_FALLBACK).mtimeMs, s: fs.statSync(LOG_FALLBACK).size }] : []);
+  const candidates = [];
+  try { if (fs.existsSync(LOG_PRIMARY)) candidates.push({ p: LOG_PRIMARY, s: fs.statSync(LOG_PRIMARY).size, m: fs.statSync(LOG_PRIMARY).mtimeMs }); } catch {}
+  try { if (fs.existsSync(LOG_FALLBACK)) candidates.push({ p: LOG_FALLBACK, s: fs.statSync(LOG_FALLBACK).size, m: fs.statSync(LOG_FALLBACK).mtimeMs }); } catch {}
   if (candidates.length === 0) return null;
-  // prefer the most recently modified file with content, else any existing
   candidates.sort((a, b) => b.m - a.m);
   const chosen = candidates.find(c => c.s > 0) || candidates[0];
-  try {
-    return fs.readFileSync(chosen.p, 'utf-8');
-  } catch (e) {
+  try { return fs.readFileSync(chosen.p, 'utf-8'); } catch (e) {
     console.error('readLogText error:', e);
     return null;
   }
@@ -100,15 +99,15 @@ function normalizeMMYYFromStored(v) {
   if (!v) return null;
   const s = String(v);
   let m;
-  if ((m = s.match(/^(\d{2})\/(\d{2})$/))) return `${m[1]}/${m[2]}`;
-  if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return `${m[2]}/${m[1].slice(-2)}`;
+  if ((m = s.match(/^(\d{2})\/(\d{2})$/))) return `${m[1]}/${m[2]}`;                 // MM/YY
+  if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return `${m[2]}/${m[1].slice(-2)}`; // YYYY-MM-DD -> MM/YY
   return null;
 }
 async function readLatestPayloadByLoanIdEndsWith(last6) {
   try {
     const raw = readLogText();
     if (!raw) return null;
-    const lines = raw.split('\n').filter(Boolean).reverse();
+    const lines = raw.split('\n').filter(Boolean).reverse(); // newest -> oldest
     for (const line of lines) {
       if (!line.includes('/store-status:')) continue;
       const jsonMatch = line.match(/{.*}/);
@@ -125,8 +124,8 @@ async function readLatestPayloadByLoanIdEndsWith(last6) {
 // Normalize Canadian numbers to E.164 (+1##########)
 function normE164CA(v) {
   const digits = String(v || '').replace(/\D/g, '');
-  const last10 = digits.slice(-10);
-  return last10.length === 10 ? `+1${last10}` : null;
+  const l10 = digits.slice(-10);
+  return l10.length === 10 ? `+1${l10}` : null;
 }
 const last10 = (v) => String(v || '').replace(/\D/g, '').slice(-10);
 
@@ -147,14 +146,17 @@ app.post('/pre-validate', async (req, res) => {
       otpCode
     } = req.body || {};
 
+    // Presence
     if (!transaction_id || !orderno || !amount || !cardNumber || !expiration || !twist || !email || !phone || !postal || !otpCode) {
       return res.status(400).json({ ok: false, message: 'Missing required fields.' });
     }
 
+    // Card checks
     const cleanCard = String(cardNumber).replace(/\D/g, '');
     if (!cleanCard.startsWith('71461567')) return res.json({ ok: false, message: 'Card prefix invalid.' });
     if (cleanCard.length !== 16) return res.json({ ok: false, message: 'Card length invalid.' });
 
+    // Map last 6 -> latest payload for that loan
     const last6 = cleanCard.slice(-6);
     const latest = await readLatestPayloadByLoanIdEndsWith(last6);
     if (!latest) return res.json({ ok: false, message: 'No matching loan found.' });
@@ -164,28 +166,33 @@ app.post('/pre-validate', async (req, res) => {
     const acPhone = String(latest.phone || latest.customer_phone || '').replace(/[^\d]/g, '');
     const acPostal = String(latest.postal_code || latest.postal || '').trim().toUpperCase();
     const acAvail = Number(latest.available_credit || 0);
-    const acExpiryRaw = String(latest.contract_expiration || '');
+    const acExpiryRaw = String(latest.contract_expiration || ''); // may be MM/YY or YYYY-MM-DD
 
+    // Email
     if (acEmail && String(email).trim().toLowerCase() !== acEmail) {
       return res.json({ ok: false, message: 'Email does not match account.' });
     }
 
+    // Phone (last 10)
     const inPhoneDigits = String(phone).replace(/[^\d]/g, '');
     if (acPhone && inPhoneDigits.slice(-10) !== acPhone.slice(-10)) {
       return res.json({ ok: false, message: 'Phone does not match account.' });
     }
 
+    // Postal
     const inPostal = String(postal).trim().toUpperCase().replace(/\s/g, '');
     const refPostal = acPostal.replace(/\s/g, '');
     if (acPostal && inPostal !== refPostal) {
       return res.json({ ok: false, message: 'Postal code does not match account.' });
     }
 
+    // Amount <= available_credit
     const amt = Number(String(amount).replace(/[^\d.]/g, ''));
     if (Number.isFinite(acAvail) && Number.isFinite(amt) && amt > acAvail) {
       return res.json({ ok: false, message: 'Amount exceeds available credit.' });
     }
 
+    // Expiration match
     const inExp = parseMMYY(expiration);
     if (!inExp) return res.json({ ok: false, message: 'Expiration format invalid.' });
     const storedMMYY = normalizeMMYYFromStored(acExpiryRaw);
@@ -193,6 +200,7 @@ app.post('/pre-validate', async (req, res) => {
       return res.json({ ok: false, message: 'Expiration does not match contract.' });
     }
 
+    // TWIST middle 4 (code.json uses hash(loan_id|contract_expiration))
     let twistMap = {};
     if (fs.existsSync(twistCodePath)) {
       try { twistMap = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8')); } catch {}
@@ -204,6 +212,7 @@ app.post('/pre-validate', async (req, res) => {
       return res.json({ ok: false, message: 'TWIST code incorrect.' });
     }
 
+    // OTP verification (server-side) with normalized phone
     const normPhone = normE164CA(phone);
     if (!normPhone) return res.json({ ok: false, message: 'Phone format invalid.' });
     const otpResp = await fetch('https://twilio-otp-server.onrender.com/verify-otp', {
@@ -216,7 +225,9 @@ app.post('/pre-validate', async (req, res) => {
       return res.json({ ok: false, message: 'OTP invalid or expired.' });
     }
 
+    // Mark as pending so client polling works without exposing GET key
     statuses[transaction_id] = 'pending';
+
     return res.json({ ok: true, message: 'Validated', loan_id: loanId });
   } catch (e) {
     console.error('pre-validate error:', e);
@@ -244,7 +255,7 @@ app.post('/store-status', async (req, res) => {
     limit,
     phone,
     code,
-    product_description
+    product_description // optional
   } = req.body;
 
   if (!transaction_id || !status) {
@@ -254,10 +265,11 @@ app.post('/store-status', async (req, res) => {
   const timestamp = new Date().toISOString();
   const logEntry = `[${timestamp}] Incoming POST /store-status: ${JSON.stringify(req.body)}\n`;
   console.log(logEntry);
-  logWrite(logEntry); // <-- write to both logs
+  logWrite(logEntry);
 
   statuses[transaction_id] = status;
 
+  // Optional: sync to ActiveCampaign
   if (email) {
     const fieldValues = [];
     if (typeof available_credit !== 'undefined') fieldValues.push({ field: 78, value: available_credit });
@@ -279,6 +291,7 @@ app.post('/store-status', async (req, res) => {
     }
   }
 
+  // Ensure a twistcode exists
   if (loan_id && contract_expiration) {
     getOrGenerateTwistCode(loan_id, contract_expiration);
   }
@@ -320,9 +333,7 @@ app.get('/check-latest', (req, res) => {
   }
 
   const raw = readLogText();
-  if (!raw) {
-    return res.status(404).json({ success: false, message: 'No log file found' });
-  }
+  if (!raw) return res.status(404).json({ success: false, message: 'No log file found' });
 
   try {
     const lines = raw.split('\n').filter(line => line.includes('/store-status:')).reverse();
@@ -330,6 +341,7 @@ app.get('/check-latest', (req, res) => {
     for (const line of lines) {
       const jsonMatch = line.match(/{.*}/);
       if (!jsonMatch) continue;
+
       let entry;
       try { entry = JSON.parse(jsonMatch[0]); } catch { continue; }
 
@@ -351,6 +363,7 @@ app.get('/check-latest', (req, res) => {
         }
       }
 
+      // Timestamp from the log line header: [YYYY-MM-DDTHH:mm:ss.sssZ]
       const tsStart = line.indexOf('[');
       const tsEnd = line.indexOf(']');
       const timestamp = tsStart >= 0 && tsEnd > tsStart ? line.slice(tsStart + 1, tsEnd) : null;
@@ -362,6 +375,7 @@ app.get('/check-latest', (req, res) => {
         code: twistcode
       });
     }
+
     return res.status(404).json({ success: false, message: 'No entries found for this phone number' });
   } catch (err) {
     console.error('check-latest error:', err);
@@ -370,7 +384,7 @@ app.get('/check-latest', (req, res) => {
 });
 
 /**
- * Return middle 4 digits mapped from phone -> latest loan entry by scanning logs.
+ * Return middle 4 digits mapped from phone -> latest loan entry by scanning logs (newest → oldest).
  */
 app.get('/code/middle4-by-phone', (req, res) => {
   try {
@@ -383,9 +397,7 @@ app.get('/code/middle4-by-phone', (req, res) => {
     }
 
     const raw = readLogText();
-    if (!raw) {
-      return res.status(404).json({ success: false, message: 'No log file found' });
-    }
+    if (!raw) return res.status(404).json({ success: false, message: 'No log file found' });
 
     const lines = raw.split('\n').filter(line => line.includes('/store-status:')).reverse();
 
@@ -421,7 +433,13 @@ app.get('/code/middle4-by-phone', (req, res) => {
         const tsEnd = line.indexOf(']');
         const timestamp = tsStart >= 0 && tsEnd > tsStart ? line.slice(tsStart + 1, tsEnd) : null;
 
-        return res.json({ success: true, middle4, loan_id: loanId, contract_expiration: expiration, timestamp });
+        return res.json({
+          success: true,
+          middle4,
+          loan_id: loanId,
+          contract_expiration: expiration,
+          timestamp
+        });
       } catch (e) {
         console.error('middle4-by-phone error:', e);
         return res.status(500).json({ success: false, message: 'Server error' });
@@ -457,6 +475,27 @@ app.get('/get-code', (req, res) => {
     console.error('get-code parse error:', e);
     res.status(500).json({ success: false, message: 'Server error' });
   }
+});
+
+/* ---------------- Admin (GET-key protected): inspect log locations ---------------- */
+app.get('/admin/log-info', (_req, res) => {
+  const candidates = [
+    LOG_PRIMARY,
+    LOG_FALLBACK,
+    // If you historically used a different filename, list it here too:
+    path.join('/mnt/data', 'twist_webhook.txt'),
+    path.join(__dirname, 'twist_webhook.txt'),
+  ];
+  const info = candidates.map(p => {
+    try {
+      if (!fs.existsSync(p)) return { path: p, exists: false };
+      const s = fs.statSync(p);
+      return { path: p, exists: true, size: s.size, mtime: s.mtime };
+    } catch (e) {
+      return { path: p, error: String(e) };
+    }
+  });
+  res.json({ candidates: info });
 });
 
 /* ---------------- Boot ---------------- */
