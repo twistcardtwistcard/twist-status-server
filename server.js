@@ -126,6 +126,16 @@ function normalizeMMYYFromStored(v) {
   return null;
 }
 
+// Convert any supported expiration format to MMYY (digits only)
+function toMMYY(raw) {
+  const s = String(raw || '').trim();
+  let m;
+  if (/^\d{4}$/.test(s)) return s;                              // MMYY
+  if ((m = s.match(/^(\d{2})\/(\d{2})$/))) return m[1] + m[2];   // MM/YY -> MMYY
+  if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return m[2] + m[1].slice(-2); // YYYY-MM-DD -> MMYY
+  return null;
+}
+
 /* --------- Phone + expiration utilities for resilient matching --------- */
 // collect all phone-like fields from a log entry
 function phonesFromEntry(entry) {
@@ -220,10 +230,11 @@ app.post('/pre-validate', async (req, res) => {
       return res.status(400).json({ ok: false, message: 'Missing required fields.' });
     }
 
-    // Card checks
+    // Card checks (UPDATED: exactly 14 digits, no prefix rule)
     const cleanCard = String(cardNumber).replace(/\D/g, '');
-    if (!cleanCard.startsWith('71461567')) return res.json({ ok: false, message: 'Card prefix invalid.' });
-    if (cleanCard.length !== 16) return res.json({ ok: false, message: 'Card length invalid.' });
+    if (cleanCard.length !== 14) {
+      return res.json({ ok: false, message: 'Card length invalid (must be 14 digits).' });
+    }
 
     // Map last 6 -> latest payload for that loan
     const last6 = cleanCard.slice(-6);
@@ -235,7 +246,7 @@ app.post('/pre-validate', async (req, res) => {
     const acPhone = String(latest.phone || latest.customer_phone || '').replace(/[^\d]/g, '');
     const acPostal = String(latest.postal_code || latest.postal || '').trim().toUpperCase();
     const acAvail = Number(latest.available_credit || 0);
-    const acExpiryRaw = String(latest.contract_expiration || ''); // may be MM/YY or YYYY-MM-DD
+    const acExpiryRaw = String(latest.contract_expiration || ''); // may be MM/YY or YYYY-MM-DD or MMYY
 
     // Email
     if (acEmail && String(email).trim().toLowerCase() !== acEmail) {
@@ -261,11 +272,13 @@ app.post('/pre-validate', async (req, res) => {
       return res.json({ ok: false, message: 'Amount exceeds available credit.' });
     }
 
-    // Expiration match
-    const inExp = parseMMYY(expiration);
-    if (!inExp) return res.json({ ok: false, message: 'Expiration format invalid.' });
-    const storedMMYY = normalizeMMYYFromStored(acExpiryRaw);
-    if (!storedMMYY || storedMMYY !== `${inExp.mm}/${inExp.yy}`) {
+    // Expiration match (UPDATED: form sends MMYY; compare as MMYY)
+    const inExpMMYY = toMMYY(expiration);      // expect MMYY from the form
+    if (!inExpMMYY) {
+      return res.json({ ok: false, message: 'Expiration format invalid (MMYY).' });
+    }
+    const storedMMYY = toMMYY(acExpiryRaw);    // accept MM/YY, YYYY-MM-DD, or MMYY from logs
+    if (!storedMMYY || storedMMYY !== inExpMMYY) {
       return res.json({ ok: false, message: 'Expiration does not match contract.' });
     }
 
