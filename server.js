@@ -93,7 +93,7 @@ function normE164CA(v) {
   const last10 = digits.slice(-10);
   return last10.length === 10 ? `+1${last10}` : null;
 }
-// Last 10 digits helper (used by phone lookups)
+// Phone helper: compare by last 10 digits
 const last10 = (v) => String(v || '').replace(/\D/g, '').slice(-10);
 
 /* ---------------- PRE-VALIDATE (rules + OTP) ---------------- */
@@ -355,7 +355,8 @@ app.get('/check-latest', (req, res) => {
 });
 
 /**
- * NEW: Return middle 4 digits mapped from phone -> latest loan entry.
+ * NEW (simplified): Return middle 4 digits mapped from phone -> latest loan entry
+ * by scanning existing webhook_logs.txt (newest → oldest).
  */
 app.get('/code/middle4-by-phone', (req, res) => {
   try {
@@ -368,8 +369,9 @@ app.get('/code/middle4-by-phone', (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid phone format' });
     }
 
+    // Read logs newest → oldest
     const raw = fs.readFileSync(logFilePath, 'utf-8');
-    const lines = raw.split('\n').filter(line => line.includes('/store-status:')).reverse(); // newest → oldest
+    const lines = raw.split('\n').filter(line => line.includes('/store-status:')).reverse();
 
     for (const line of lines) {
       const jsonMatch = line.match(/{.*}/);
@@ -391,42 +393,37 @@ app.get('/code/middle4-by-phone', (req, res) => {
       const loanId = entry.loan_id || null;
       const expiration = entry.contract_expiration || null;
 
-      if (!loanId || !expiration) {
-        // Found phone, but this line lacks loan info — continue scanning
-        continue;
-      }
+      if (!loanId || !expiration) continue;
 
       if (!fs.existsSync(twistCodePath)) {
         return res.status(404).json({ success: false, message: 'code.json not found' });
       }
-      let twistcode = null;
+
       try {
         const data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
         const hash = crypto.createHash('sha256').update(`${loanId}|${expiration}`).digest('hex');
-        twistcode = data[hash] || null;
+        const twistcode = data[hash] || null;
+        if (!twistcode) {
+          return res.status(404).json({ success: false, message: 'No twistcode for this loan' });
+        }
+        const middle4 = String(twistcode).slice(4, 8);
+
+        // Extract timestamp from log line
+        const tsStart = line.indexOf('[');
+        const tsEnd = line.indexOf(']');
+        const timestamp = tsStart >= 0 && tsEnd > tsStart ? line.slice(tsStart + 1, tsEnd) : null;
+
+        return res.json({
+          success: true,
+          middle4,
+          loan_id: loanId,
+          contract_expiration: expiration,
+          timestamp
+        });
       } catch (e) {
-        console.error('middle4-by-phone code.json error:', e);
+        console.error('middle4-by-phone error:', e);
         return res.status(500).json({ success: false, message: 'Server error' });
       }
-
-      if (!twistcode) {
-        return res.status(404).json({ success: false, message: 'No twistcode for this loan' });
-      }
-
-      const middle4 = String(twistcode).slice(4, 8);
-
-      // Success — return the mapping we used
-      const tsStart = line.indexOf('[');
-      const tsEnd = line.indexOf(']');
-      const timestamp = tsStart >= 0 && tsEnd > tsStart ? line.slice(tsStart + 1, tsEnd) : null;
-
-      return res.json({
-        success: true,
-        middle4,
-        loan_id: loanId,
-        contract_expiration: expiration,
-        timestamp
-      });
     }
 
     return res.status(404).json({ success: false, message: 'No entries found for this phone number' });
