@@ -36,6 +36,166 @@
   }
   @media (max-width: 520px) { .row, .row3 { grid-template-columns: 1fr; } .form-container{ padding:1rem; } }
 </style>
+<!-- ==== VISUAL THEME OVERLAY (non-breaking, CSS-only) ==== -->
+<style>
+  /* Tokens */
+  :root{
+    --brand-600:#ea580c;
+    --brand-700:#c2410c;
+    --ring:rgba(249,115,22,.28);
+    --surface:#fff;
+    --card:#fff;
+    --border:#e5e7eb;
+    --text:#111827;
+    --muted-text:#6b7280;
+    --btn-gray:#6b7280;
+    --btn-gray-700:#4b5563;
+  }
+
+  /* Page & wrapper */
+  body{
+    background:radial-gradient(1200px 800px at 10% -10%, #fff7ed 0%, var(--bg) 42%);
+    color:var(--text);
+    -webkit-font-smoothing:antialiased;
+    -moz-osx-font-smoothing:grayscale;
+    text-rendering:optimizeLegibility;
+  }
+  .form-wrapper{ padding-top:.25rem; }
+  .form-wrapper h2{
+    font-weight:800; letter-spacing:-.02em; margin-bottom:.35rem;
+  }
+  #orderDetails{
+    background:linear-gradient(180deg,#fff,#f8fafc);
+    border:1px solid var(--border);
+    padding:.75rem .9rem; border-radius:12px;
+    box-shadow:0 4px 16px rgba(0,0,0,.04);
+  }
+
+  /* Container & watermark logo */
+  .form-container{
+    position:relative;
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:16px;
+    padding:1.25rem;
+    box-shadow:0 10px 30px rgba(17,24,39,.08);
+    overflow:hidden; /* ensures watermark respects rounded corners */
+  }
+  .form-container::after{
+    content:"";
+    position:absolute; right:10px; bottom:10px;
+    width:84px; height:84px; opacity:.08; pointer-events:none;
+    background-image:url("https://cdn.shopify.com/s/files/1/0745/9635/2225/files/Twist_500ppx.jpg?v=1748980607");
+    background-repeat:no-repeat; background-size:contain; filter:grayscale(100%);
+  }
+
+  /* Fieldset (order summary) */
+  form fieldset{
+    background:linear-gradient(180deg,#f2f6fb,#eef3f7);
+    border:1px solid #e2e8f0 !important; border-radius:12px !important;
+  }
+
+  /* Layout safety: never overlap */
+  .row{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.9rem; }
+  .row3{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.9rem; }
+  .form-group{ min-width:0; }
+  input, button{ min-width:0; box-sizing:border-box; }
+  .btn-inline{ display:flex; gap:.5rem; align-items:stretch; }
+  .btn-inline input{ flex:1 1 auto; min-width:0; }
+  .btn-inline button{ flex:0 0 auto; }
+
+  /* Inputs (Stripe-like) */
+  label{ font-size:.925rem; color:#374151; }
+  input{
+    background:#fff;
+    border:1px solid #d1d5db;
+    border-radius:10px;
+    transition:border-color .15s ease, box-shadow .15s ease, transform .06s ease;
+    font-size:16px; /* avoids iOS zoom on focus */
+    line-height:1.25rem;
+  }
+  input:hover{ border-color:#cbd5e1; }
+  input:focus{
+    border-color:var(--brand);
+    box-shadow:0 0 0 4px var(--ring);
+    transform:translateY(-1px);
+  }
+  input::placeholder{ color:#9ca3af; }
+
+  /* Buttons */
+  button{
+    background:linear-gradient(180deg,var(--brand),var(--brand-600));
+    color:#fff; border:none; border-radius:10px;
+    box-shadow:0 6px 18px rgba(249,115,22,.22);
+    transition:transform .08s ease, box-shadow .12s ease, filter .12s ease;
+    font-size:15px; font-weight:800;
+  }
+  button:hover{ transform:translateY(-1px); filter:brightness(1.02); }
+  button:active{ transform:translateY(0); box-shadow:0 3px 12px rgba(249,115,22,.18); }
+  button[disabled]{ box-shadow:none; filter:grayscale(.12) brightness(.95); }
+
+  /* OTP buttons should be gray (both Send OTP & Verify OTP live inside .btn-inline) */
+  .btn-inline button{
+    background:linear-gradient(180deg,var(--btn-gray),var(--btn-gray-700)) !important;
+    box-shadow:0 4px 14px rgba(75,85,99,.22);
+  }
+
+  /* Primary submit: uppercase */
+  #submitBtn{
+    text-transform:uppercase; letter-spacing:.04em;
+  }
+
+  /* Notice & errors */
+  .notice{
+    border-color:#fde68a; background:#fffbeb; color:#854d0e;
+    box-shadow:0 4px 14px rgba(245,158,11,.12);
+  }
+  .err{
+    background:#fff1f2; border:1px solid #fecdd3; color:#be123c;
+    padding:.6rem .75rem; border-radius:8px;
+  }
+
+  /* Spinner + results tone */
+  .spinner{ width:44px; height:44px; border-width:4px; }
+  #confirmationSuccess .ok{ color:#059669; }
+  #confirmationDenied .bad{ color:#dc2626; }
+
+  /* Mobile-first responsiveness */
+  @media (max-width: 640px){
+    .row, .row3{ grid-template-columns:1fr; }
+    .form-container{ padding:1rem; }
+    .btn-inline{ gap:.5rem; }
+  }
+  /* For extra-narrow phones, allow wrapping instead of overflow */
+  @media (max-width: 380px){
+    .btn-inline{ flex-wrap:wrap; }
+    .btn-inline button{ width:100%; }
+  }
+
+  /* Dark mode (auto) */
+  @media (prefers-color-scheme: dark){
+    :root{
+      --card:#0f172a; --border:#1f2937; --text:#e5e7eb; --muted-text:#94a3b8;
+      --ring:rgba(249,115,22,.35);
+    }
+    body{ background:radial-gradient(1200px 800px at 10% -10%, #1f2937 0%, #0b0f17 60%); color:var(--text); }
+    .form-container{ background:var(--card); border-color:var(--border); }
+    form fieldset{ background:linear-gradient(180deg,#0b1220,#0b1422); border-color:#1e293b !important; }
+    input{ background:#0b1220; border-color:#334155; color:var(--text); }
+    input::placeholder{ color:#64748b; }
+    label{ color:#cbd5e1; }
+    #orderDetails{ background:linear-gradient(180deg,#0f172a,#0b1220); border-color:var(--border); }
+    .notice{ background:#1a1f2a; border-color:#334155; color:#eab308; }
+    .err{ background:#27151a; border-color:#7f1d1d; color:#fecaca; }
+    .btn-inline button{ box-shadow:0 4px 14px rgba(0,0,0,.35); }
+  }
+
+  /* Motion safety */
+  @media (prefers-reduced-motion: reduce){
+    *{ transition:none !important; animation:none !important; }
+  }
+</style>
+
 </head>
 <body>
 <div class="form-wrapper">
