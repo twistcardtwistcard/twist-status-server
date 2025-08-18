@@ -5,6 +5,8 @@ const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+/* PATCH: import validator */
+const { validateTransaction } = require('./validation');
 
 const app = express();
 app.use(cors());
@@ -347,6 +349,74 @@ app.post('/pre-validate', async (req, res) => {
   } catch (e) {
     console.error('pre-validate error:', e);
     return res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+/* PATCH: New single-shot validation + finalize endpoint */
+app.post('/validate-transaction', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const {
+      transaction_id,
+      orderno,
+      amount,
+      cardNumber,
+      expiration,
+      twist,
+      email,
+      phone,
+      postal,
+      address,
+      city,
+      name,
+      product_description
+    } = payload;
+
+    // Run validations against logs and code.json
+    const result = await validateTransaction({ amount, cardNumber, expiration, twist, postal });
+
+    if (!result.ok) {
+      return res.json({ ok: false, status: 'denied', message: result.message || 'Denied' });
+    }
+
+    // If approved, record it in the status store + logs via the existing /store-status
+    const apiKey = process.env.API_KEY;
+    const base = process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${process.env.PORT || 3000}`;
+
+    const storeBody = {
+      transaction_id,
+      status: 'approved',
+      email,
+      phone,
+      orderno,
+      amount,
+      postal,
+      address,
+      city,
+      name,
+      loan_id: result.matched.loan_id,
+      contract_expiration: result.matched.contract_expiration,
+      available_credit: result.matched.available_credit,
+      product_description
+    };
+
+    try {
+      await fetch(`${base}/store-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+        body: JSON.stringify(storeBody)
+      });
+    } catch (e) {
+      console.error('Store-status post failed:', e);
+      // proceed; local status is still set below
+    }
+
+    if (transaction_id) statuses[transaction_id] = 'approved';
+
+    return res.json({ ok: true, status: 'approved', message: 'Approved' });
+  } catch (e) {
+    console.error('validate-transaction error:', e);
+    return res.status(500).json({ ok: false, status: 'denied', message: 'Server error' });
   }
 });
 
