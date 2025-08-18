@@ -14,6 +14,7 @@
   input { width: 100%; padding: .65rem .7rem; font-size: 1rem; border-radius: 8px; border: 1px solid #cfcfcf; outline: none; }
   input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(249,115,22,.15); }
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .75rem; }
   button { background: var(--brand); color: #fff; border: 0; padding: .8rem 1.1rem; border-radius: 8px; cursor: pointer; font-weight: 700; }
   button[disabled] { opacity: .6; cursor: not-allowed; }
   .muted { color: var(--muted); font-size: .92rem; }
@@ -57,7 +58,7 @@
 
       <div class="form-group">
         <label for="cardNumber">Card Number</label>
-        <input type="text" id="cardNumber" maxlength="17" inputmode="numeric" required>
+        <input type="text" id="cardNumber" maxlength="17" inputmode="numeric" required placeholder="(14 digits)">
       </div>
 
       <div class="row">
@@ -71,16 +72,19 @@
         </div>
       </div>
 
-      <!-- First/Last Name removed -->
       <div class="form-group">
         <label for="address">Address</label>
         <input type="text" id="address" autocomplete="address-line1">
       </div>
 
-      <div class="row">
+      <div class="row3">
         <div class="form-group">
           <label for="city">City</label>
           <input type="text" id="city" autocomplete="address-level2">
+        </div>
+        <div class="form-group">
+          <label for="province">Province (2-letter)</label>
+          <input type="text" id="province" placeholder="QC" maxlength="2" autocomplete="address-level1" required>
         </div>
         <div class="form-group">
           <label for="postal">Postal Code</label>
@@ -167,18 +171,17 @@
   const cardEl = document.getElementById('cardNumber');
   const expEl = document.getElementById('expiration');
   const twistEl = document.getElementById('twist');
+  const provEl = document.getElementById('province');
   const phoneEl = document.getElementById('otpPhone');
   const otpEl = document.getElementById('otpCode');
   const clientErr = document.getElementById('clientErr');
 
-  // group digits in blocks of 4; for 14 digits it appears "#### #### #### ##"
   cardEl.addEventListener('input', function () {
     let v = this.value.replace(/\D/g, '');
     if (v.length > 14) v = v.slice(0, 14);
     this.value = v.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
   });
 
-  // MMYY (digits only)
   expEl.addEventListener('input', function () {
     let v = this.value.replace(/\D/g, '');
     this.value = v.slice(0, 4);
@@ -193,6 +196,9 @@
   });
   otpEl.addEventListener('input', () => {
     otpEl.value = otpEl.value.replace(/\D/g, '').slice(0, 6);
+  });
+  provEl.addEventListener('input', () => {
+    provEl.value = provEl.value.toUpperCase().slice(0,2);
   });
 
   /* ------------ OTP (lock the phone) ------------ */
@@ -232,7 +238,6 @@
     otpStatus.textContent = "Verifying...";
     otpStatus.style.color = "";
     try {
-      // Verify via status server proxy (which also caches)
       const res = await fetch('https://twist-status-server.onrender.com/otp/verify-proxy', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ phone: lockedPhone, code })
@@ -242,7 +247,7 @@
         otpStatus.textContent = "✅ OTP verified!";
         otpStatus.style.color = "green";
         submitBtn.disabled = false;
-        phoneEl.readOnly = true; // lock phone after success
+        phoneEl.readOnly = true;
       } else {
         otpStatus.textContent = `❌ Invalid OTP${data.error ? ' – ' + data.error : ''}`;
         otpStatus.style.color = "red";
@@ -262,17 +267,22 @@
     setTimeout(() => clientErr.classList.add('hidden'), 5000);
   }
 
+  const VALID_PROV = /^(AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT)$/i;
+
   document.getElementById('paymentForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
     const rawCard = cardEl.value.replace(/\s/g, '');
     const exp = expEl.value.replace(/\D/g, '');
     const twist = twistEl.value.replace(/\D/g, '');
+    const prov = provEl.value.trim().toUpperCase();
 
-    // Basic client checks
-    if (!/^\d{14}$/.test(rawCard)) return showErr('Card must be 14 digits.');
+    // Basic client checks (incl. prefix + province)
+    if (!/^\d{14}$/.test(rawCard)) return showErr('Incorrect Card Number');
+    if (!rawCard.startsWith('71461567')) return showErr('Incorrect Card Number');
     if (!/^\d{4}$/.test(exp)) return showErr('Expiration must be MMYY.');
     if (!/^\d{4}$/.test(twist)) return showErr('TWIST Code must be 4 digits.');
+    if (!VALID_PROV.test(prov)) return showErr('Province must be a valid 2-letter code (e.g., QC).');
 
     const lockedPhone = localStorage.getItem(OTP_PHONE_KEY);
     if (!lockedPhone) return showErr('Please send and verify an OTP first.');
@@ -295,14 +305,14 @@
       postal: document.getElementById('postal').value.trim(),
       address: document.getElementById('address').value.trim(),
       city: document.getElementById('city').value.trim(),
+      province: prov,
       otpCode: otpEl.value
     };
 
-    // Show small spinner while PRE-VALIDATE runs
     document.getElementById('loadingSpinner').classList.remove('hidden');
 
     try {
-      // 1) PRE-VALIDATE (checks: loan match by last6, expiration, TWIST, postal, amount <= available_credit, OTP)
+      // 1) PRE-VALIDATE (server checks loan, exp, twist, postal, amount<=credit, OTP)
       const pre = await fetch('https://twist-status-server.onrender.com/pre-validate', {
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
@@ -310,15 +320,18 @@
 
       if (!pre.ok || !preData?.ok) {
         document.getElementById('loadingSpinner').classList.add('hidden');
-        return showErr(preData?.message || 'Validation failed.');
+        const msg = preData?.message || 'Validation failed.';
+        // Map legacy message to your requested wording
+        const shown = (msg === 'No matching loan found.') ? 'Incorrect Card Number' : msg;
+        return showErr(shown);
       }
 
-      // 2) Move to "waiting for confirmation" screen
+      // 2) Move to waiting screen
       document.getElementById('paymentForm').classList.add('hidden');
       document.getElementById('confirmationStep').classList.remove('hidden');
       document.getElementById('loadingSpinner').classList.add('hidden');
 
-      // 3) Finalize server-side (will also POST /store-status on approval)
+      // 3) Finalize (server will also POST /store-status on approval)
       const resp = await fetch('https://twist-status-server.onrender.com/validate-transaction', {
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
