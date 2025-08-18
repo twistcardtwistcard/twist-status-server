@@ -5,7 +5,7 @@ const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-/* PATCH: import validator */
+/* PATCH: import validator (kept from last good version) */
 const { validateTransaction } = require('./validation');
 
 const app = express();
@@ -249,28 +249,31 @@ app.post('/pre-validate', async (req, res) => {
       email,
       phone,
       postal,
-      firstName, lastName, address, city, // captured (no validation here)
+      address, city,           // captured
+      province,                // PATCH: capture province
       otpCode
     } = req.body || {};
 
-    // Presence
+    // Presence (kept light; client enforces province required)
     if (!transaction_id || !orderno || !amount || !cardNumber || !expiration || !twist || !email || !phone || !postal || !otpCode) {
       return res.status(400).json({ ok: false, message: 'Missing required fields.' });
     }
 
-    // Card checks (14 digits, no prefix)
+    // Card checks (PATCH: length + prefix + wording)
     const cleanCard = String(cardNumber).replace(/\D/g, '');
-    if (cleanCard.length !== 14) return res.json({ ok: false, message: 'Card length invalid (must be 14 digits).' });
+    if (cleanCard.length !== 14) return res.json({ ok: false, message: 'Incorrect Card Number' });
+    if (!cleanCard.startsWith('71461567')) return res.json({ ok: false, message: 'Incorrect Card Number' });
 
     // Map last 6 -> latest payload for that loan
     const last6 = cleanCard.slice(-6);
     const latest = await readLatestPayloadByLoanIdEndsWith(last6);
-    if (!latest) return res.json({ ok: false, message: 'No matching loan found.' });
+    if (!latest) return res.json({ ok: false, message: 'Incorrect Card Number' }); // PATCH: wording
 
     const loanId = String(latest.loan_id || '');
     const acEmail = String(latest.email || latest.customer_email || '').trim().toLowerCase();
     const acPhone = String(latest.phone || latest.customer_phone || '').replace(/[^\d]/g, '');
     const acPostal = String(latest.postal_code || latest.postal || '').trim().toUpperCase();
+    const acProvince = String(latest.province || latest.state || '').trim().toUpperCase(); // PATCH: province support
     const acAvail = Number(latest.available_credit || 0);
     const acExpiryRaw = String(latest.contract_expiration || ''); // may be MM/YY or YYYY-MM-DD or MMYY
 
@@ -290,6 +293,12 @@ app.post('/pre-validate', async (req, res) => {
     const refPostal = acPostal.replace(/\s/g, '');
     if (acPostal && inPostal !== refPostal) {
       return res.json({ ok: false, message: 'Postal code does not match account.' });
+    }
+
+    // Province (PATCH)
+    const inProvince = String(province || '').trim().toUpperCase();
+    if (acProvince && inProvince && inProvince !== acProvince) {
+      return res.json({ ok: false, message: 'Province does not match account.' });
     }
 
     // Amount <= available_credit
@@ -342,7 +351,7 @@ app.post('/pre-validate', async (req, res) => {
       return res.json({ ok: false, message: 'OTP invalid or expired.' });
     }
 
-    // Mark as pending so client polling works without exposing GET key
+    // Mark as pending so client waiting screen is allowed
     statuses[transaction_id] = 'pending';
 
     return res.json({ ok: true, message: 'Validated', loan_id: loanId });
@@ -352,7 +361,7 @@ app.post('/pre-validate', async (req, res) => {
   }
 });
 
-/* PATCH: New single-shot validation + finalize endpoint */
+/* ---------------- New single-shot validation + finalize (kept) ---------------- */
 app.post('/validate-transaction', async (req, res) => {
   try {
     const payload = req.body || {};
@@ -369,17 +378,18 @@ app.post('/validate-transaction', async (req, res) => {
       address,
       city,
       name,
-      product_description
+      product_description,
+      province            // PATCH: accept province from client
     } = payload;
 
-    // Run validations against logs and code.json
+    // Run validations against logs and code.json (same core checks as before)
     const result = await validateTransaction({ amount, cardNumber, expiration, twist, postal });
 
     if (!result.ok) {
       return res.json({ ok: false, status: 'denied', message: result.message || 'Denied' });
     }
 
-    // If approved, record it in the status store + logs via the existing /store-status
+    // If approved, record it via the existing /store-status
     const apiKey = process.env.API_KEY;
     const base = process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${process.env.PORT || 3000}`;
 
@@ -397,7 +407,10 @@ app.post('/validate-transaction', async (req, res) => {
       loan_id: result.matched.loan_id,
       contract_expiration: result.matched.contract_expiration,
       available_credit: result.matched.available_credit,
-      product_description
+      product_description,
+      /* PATCH: forward province as state (for AC field 85) and keep province for logging */
+      state: province,
+      province
     };
 
     try {
@@ -454,7 +467,7 @@ app.post('/store-status', async (req, res) => {
 
   statuses[transaction_id] = status;
 
-  // Optional: sync to ActiveCampaign
+  // Optional: sync to ActiveCampaign (unchanged, state -> field 85)
   if (email) {
     const fieldValues = [];
     if (typeof available_credit !== 'undefined') fieldValues.push({ field: 78, value: available_credit });
