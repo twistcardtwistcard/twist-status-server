@@ -7,6 +7,8 @@ const path = require('path');
 const crypto = require('crypto');
 /* PATCH: import validator (kept from last good version) */
 const { validateTransaction } = require('./validation');
+/* NEW: durable payload index module */
+const payloadIndex = require('./lib/payloadIndex');
 
 const app = express();
 app.use(cors());
@@ -42,7 +44,7 @@ const statuses = {}; // { transaction_id: 'pending'|'approved'|... }
  * - Primary path from env LOG_FILE_PATH or defaults to /mnt/data/webhook_logs.txt (persistent on Render)
  * - Fallback path in app directory ./webhook_logs.txt
  * - Touch primary on boot; write to both when possible.
- * - NEW: reader merges BOTH logs and sorts newest→oldest by timestamp.
+ * - Reader merges BOTH logs and sorts newest→oldest by timestamp.
  */
 const LOG_PRIMARY = process.env.LOG_FILE_PATH || path.join('/mnt/data', 'webhook_logs.txt');
 const LOG_FALLBACK = path.join(__dirname, 'webhook_logs.txt');
@@ -77,7 +79,7 @@ function readMergedLogText() {
     try {
       const raw = fs.readFileSync(p, 'utf-8');
       if (raw && raw.length) lines.push(...raw.trimEnd().split('\n').filter(Boolean));
-    } catch (e) {}
+    } catch {}
   }
   if (!lines.length) return null;
 
@@ -199,98 +201,6 @@ function normE164CA(v) {
   const digits = String(v || '').replace(/\D/g, '');
   const l10 = digits.slice(-10);
   return l10.length === 10 ? `+1${l10}` : null;
-}
-
-/* ----------------------------------------------------------------------
-   DURABLE PAYLOAD INDEX (adds persistence beyond 7-day log retention)
----------------------------------------------------------------------- */
-const PAYLOAD_INDEX = path.join('/mnt/data', 'payload_index.json');
-
-function loadPayloadIndex() {
-  try {
-    const raw = fs.readFileSync(PAYLOAD_INDEX, 'utf-8');
-    const j = JSON.parse(raw);
-    return {
-      byKey: j.byKey || {},    // key=sha256(loan_id|exp) -> {loan_id, contract_expiration, code, phones:{}, emails:{}, lastPayload, updatedAt}
-      byCode: j.byCode || {},  // code -> key
-      byPhone: j.byPhone || {},// last10 -> [key, ...]
-      byEmail: j.byEmail || {},// email -> [key, ...]
-    };
-  } catch (_) {
-    return { byKey: {}, byCode: {}, byPhone: {}, byEmail: {} };
-  }
-}
-
-function savePayloadIndex(idx) {
-  try { fs.writeFileSync(PAYLOAD_INDEX, JSON.stringify(idx, null, 2)); } catch (e) {
-    console.error('savePayloadIndex error:', e);
-  }
-}
-
-function upsertIndexFromPayload(payload) {
-  if (!payload) return;
-  const loan_id = String(payload.loan_id || '').trim();
-  const exp     = String(payload.contract_expiration || '').trim();
-  if (!loan_id || !exp) return;
-
-  const key  = crypto.createHash('sha256').update(`${loan_id}|${exp}`).digest('hex');
-  const code = getOrGenerateTwistCode(loan_id, exp); // ensures code.json too
-
-  const phoneLast10 = last10(payload.phone || payload.customer_phone || payload.client_phone || '');
-  const email = String(payload.email || payload.customer_email || '').trim().toLowerCase();
-
-  const idx = loadPayloadIndex();
-  const rec = idx.byKey[key] || { loan_id, contract_expiration: exp, code, phones: {}, emails: {}, lastPayload: null, updatedAt: null };
-
-  if (phoneLast10) rec.phones[phoneLast10] = true;
-  if (email) rec.emails[email] = true;
-  rec.lastPayload = payload;
-  rec.updatedAt = new Date().toISOString();
-
-  idx.byKey[key] = rec;
-  idx.byCode[code] = key;
-
-  if (phoneLast10) {
-    if (!idx.byPhone[phoneLast10]) idx.byPhone[phoneLast10] = [];
-    if (!idx.byPhone[phoneLast10].includes(key)) idx.byPhone[phoneLast10].push(key);
-  }
-  if (email) {
-    if (!idx.byEmail[email]) idx.byEmail[email] = [];
-    if (!idx.byEmail[email].includes(key)) idx.byEmail[email].push(key);
-  }
-
-  savePayloadIndex(idx);
-}
-
-// Reverse-find the code's key from code.json if not yet in payload_index.json
-function reverseFindKeyByCode(code) {
-  if (!/^\d{12}$/.test(String(code))) return null;
-  try {
-    const data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
-    for (const [k, v] of Object.entries(data)) {
-      if (k === 'last') continue;
-      if (String(v) === String(code)) return k; // k is sha256(loan|exp)
-    }
-  } catch (_) {}
-  return null;
-}
-
-// Try to recover a payload from current logs for a given key (sha256(loan|exp))
-function findPayloadByKeyInLogs(key) {
-  const raw = readMergedLogText();
-  if (!raw) return null;
-  const lines = raw.split('\n').filter(Boolean);
-  for (const line of lines) {
-    const m = line.match(/{.*}/);
-    if (!m) continue;
-    let entry; try { entry = JSON.parse(m[0]); } catch { continue; }
-    const loan_id = entry.loan_id;
-    const exp     = entry.contract_expiration;
-    if (!loan_id || !exp) continue;
-    const k = crypto.createHash('sha256').update(`${loan_id}|${exp}`).digest('hex');
-    if (k === key) return entry;
-  }
-  return null;
 }
 
 /* ---------------- OTP verify proxy + short-lived cache ---------------- */
@@ -561,11 +471,13 @@ app.post('/store-status', async (req, res) => {
 
   statuses[transaction_id] = status;
 
-  // [ADD] Persist essentials to durable index for later lookups
-  try { upsertIndexFromPayload(req.body); } catch (e) { console.error('upsertIndexFromPayload error:', e); }
+  // Persist essentials to durable index for later lookups
+  try { payloadIndex.upsertIndexFromPayload(req.body); } catch (e) { console.error('upsertIndexFromPayload error:', e); }
 
-  // Optional: sync to ActiveCampaign (unchanged, state -> field 85)
-  if (email) {
+  // AC updates only when transaction_id is exactly 'n/a' (case-insensitive)
+  const shouldUpdateAC = String(transaction_id || '').trim().toLowerCase() === 'n/a';
+
+  if (shouldUpdateAC && email) {
     const fieldValues = [];
     if (typeof available_credit !== 'undefined') fieldValues.push({ field: 78, value: available_credit });
     if (typeof loan_id !== 'undefined') fieldValues.push({ field: 80, value: loan_id });
@@ -584,6 +496,8 @@ app.post('/store-status', async (req, res) => {
     } catch (err) {
       console.error('ActiveCampaign update error:', err);
     }
+  } else {
+    console.log(`[AC SKIP] transaction_id='${transaction_id}' — skipping ActiveCampaign update`);
   }
 
   // Ensure a twistcode exists
@@ -829,24 +743,26 @@ app.get('/admin/find-latest-by-phone', (_req, res) => {
 });
 
 /* ---------------- Durable lookups (GET-key protected) ---------------- */
-// Lookup by 12-digit TWIST code -> phones/emails/loan/exp
+
+// By TWIST code
 app.get('/lookup/by-code', (req, res) => {
   const code = String(req.query.code || '').trim();
   if (!/^\d{12}$/.test(code)) return res.status(400).json({ success: false, message: 'Invalid code' });
 
-  // 1) Check durable index
-  let idx = loadPayloadIndex();
+  // 1) Index first
+  let idx = payloadIndex.loadPayloadIndex();
   let key = idx.byCode[code];
   let rec = key && idx.byKey[key];
 
-  // 2) If not in index yet, try to recover via code.json + logs, then re-index
+  // 2) Not in index? try code.json + current logs then re-index
   if (!rec) {
-    const k = reverseFindKeyByCode(code);
+    const k = payloadIndex.reverseFindKeyByCode(code);
     if (k) {
-      const entry = findPayloadByKeyInLogs(k);
+      const raw = readMergedLogText();
+      const entry = payloadIndex.findPayloadByKeyInLogs(k, raw);
       if (entry) {
-        upsertIndexFromPayload(entry);
-        idx = loadPayloadIndex();
+        try { payloadIndex.upsertIndexFromPayload(entry); } catch {}
+        idx = payloadIndex.loadPayloadIndex();
         key = k;
         rec = idx.byKey[key];
       }
@@ -854,84 +770,46 @@ app.get('/lookup/by-code', (req, res) => {
   }
 
   if (!rec) return res.status(404).json({ success: false, message: 'No info for that code' });
-
-  return res.json({
-    success: true,
-    loan_id: rec.loan_id,
-    contract_expiration: rec.contract_expiration,
-    code: rec.code,
-    phones: Object.keys(rec.phones || {}),
-    emails: Object.keys(rec.emails || {}),
-    updatedAt: rec.updatedAt,
-  });
+  return res.json({ success: true, ...payloadIndex.summarizeRecord(rec) });
 });
 
-// Lookup by loan + expiration (exact format used when stored)
+// By loan + expiration (exact format used when stored)
 app.get('/lookup/by-loan', (req, res) => {
   const loan_id = String(req.query.loan_id || '').trim();
   const expRaw  = String(req.query.contract_expiration || '').trim();
   if (!loan_id || !expRaw) return res.status(400).json({ success: false, message: 'Missing loan_id or contract_expiration' });
 
   const key = crypto.createHash('sha256').update(`${loan_id}|${expRaw}`).digest('hex');
-  const idx = loadPayloadIndex();
+  const idx = payloadIndex.loadPayloadIndex();
   const rec = idx.byKey[key];
   if (!rec) return res.status(404).json({ success: false, message: 'No info for that loan/expiration' });
 
-  return res.json({
-    success: true,
-    loan_id: rec.loan_id,
-    contract_expiration: rec.contract_expiration,
-    code: rec.code,
-    phones: Object.keys(rec.phones || {}),
-    emails: Object.keys(rec.emails || {}),
-    updatedAt: rec.updatedAt,
-  });
+  return res.json({ success: true, ...payloadIndex.summarizeRecord(rec) });
 });
 
-// Lookup by phone (last10)
+// By phone (last10)
 app.get('/lookup/by-phone', (req, res) => {
-  const ph = String(req.query.phone || '').trim();
-  const l10 = last10(ph);
+  const l10 = String(req.query.phone || '').replace(/\D/g, '').slice(-10);
   if (l10.length !== 10) return res.status(400).json({ success: false, message: 'Invalid phone' });
 
-  const idx = loadPayloadIndex();
+  const idx = payloadIndex.loadPayloadIndex();
   const keys = idx.byPhone[l10] || [];
   if (!keys.length) return res.status(404).json({ success: false, message: 'No entries for that phone' });
 
-  const items = keys.map(k => {
-    const rec = idx.byKey[k];
-    return rec ? {
-      loan_id: rec.loan_id,
-      contract_expiration: rec.contract_expiration,
-      code: rec.code,
-      emails: Object.keys(rec.emails || {}),
-      updatedAt: rec.updatedAt,
-    } : null;
-  }).filter(Boolean);
-
+  const items = keys.map(k => payloadIndex.summarizeRecord(idx.byKey[k])).filter(Boolean);
   return res.json({ success: true, phoneLast10: l10, items });
 });
 
-// Lookup by email
+// By email
 app.get('/lookup/by-email', (req, res) => {
   const email = String(req.query.email || '').trim().toLowerCase();
   if (!email) return res.status(400).json({ success: false, message: 'Missing email' });
 
-  const idx = loadPayloadIndex();
+  const idx = payloadIndex.loadPayloadIndex();
   const keys = idx.byEmail[email] || [];
   if (!keys.length) return res.status(404).json({ success: false, message: 'No entries for that email' });
 
-  const items = keys.map(k => {
-    const rec = idx.byKey[k];
-    return rec ? {
-      loan_id: rec.loan_id,
-      contract_expiration: rec.contract_expiration,
-      code: rec.code,
-      phones: Object.keys(rec.phones || {}),
-      updatedAt: rec.updatedAt,
-    } : null;
-  }).filter(Boolean);
-
+  const items = keys.map(k => payloadIndex.summarizeRecord(idx.byKey[k])).filter(Boolean);
   return res.json({ success: true, email, items });
 });
 
@@ -945,7 +823,7 @@ app.get('/admin/reindex-from-logs', (_req, res) => {
   for (const line of lines) {
     const m = line.match(/{.*}/);
     if (!m) continue;
-    try { const obj = JSON.parse(m[0]); upsertIndexFromPayload(obj); added++; } catch {}
+    try { const obj = JSON.parse(m[0]); payloadIndex.upsertIndexFromPayload(obj); added++; } catch {}
   }
   res.json({ success: true, added });
 });
