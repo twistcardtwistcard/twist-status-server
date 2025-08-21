@@ -28,16 +28,9 @@
   #submitBtn { text-transform: uppercase; }
   .err { color: var(--bad); margin-top:.4rem; font-size:.9rem; }
 
-  /* watermark */
-  .form-container::after{
-    content:""; position:absolute; right:10px; bottom:20px; width:84px; height:84px; opacity:.08; pointer-events:none;
-    background-image:url("https://cdn.shopify.com/s/files/1/0745/9635/2225/files/Twist_500ppx.jpg?v=1748980607");
-    background-repeat:no-repeat; background-size:contain; filter:grayscale(100%);
-  }
-
   @media (max-width: 520px) { .row { grid-template-columns: 1fr; } .form-container{ padding:1rem; } }
 
-  /* ==== VISUAL THEME OVERLAY (kept, but form bg removed below) ==== */
+  /* ==== VISUAL THEME OVERLAY (form bg removed) ==== */
   :root{
     --brand-600:#ea580c;
     --brand-700:#c2410c;
@@ -72,10 +65,11 @@
     padding:1.25rem;
     box-shadow:0 10px 30px rgba(17,24,39,.08);
     overflow:hidden;
+    background: transparent !important; /* requested */
   }
   form fieldset{
-    background:linear-gradient(180deg,#f2f6fb,#eef3f7);
-    border:1px solid #e2e8f0 !important; border-radius:12px !important;
+    background: transparent !important; /* requested */
+    border:none !important; border-radius:12px !important;
   }
   input{
     background:#fff;
@@ -103,14 +97,14 @@
   .spinner{ width:44px; height:44px; border-width:4px; }
   #confirmationSuccess .ok{ color:#059669; }
   #confirmationDenied .bad{ color:#dc2626; }
+
   @media (max-width: 640px){ .row{ grid-template-columns:1fr; } .form-container{ padding:1rem; } }
   @media (max-width: 380px){ .btn-inline{ flex-wrap:wrap; } .btn-inline button{ width:100%; } }
   @media (prefers-color-scheme: dark){
     :root{ --card:#0f172a; --border:#1f2937; --text:#e5e7eb; --muted-text:#94a3b8; --ring:rgba(249,115,22,.35); }
     body{ background:radial-gradient(1200px 800px at 10% -10%, #1f2937 0%, #0b0f17 60%); color:var(--text); }
     .form-container{ border-color:#1f2937; }
-    form fieldset{ background:linear-gradient(180deg,#0b1220,#0b1422); border-color:#1e293b !important; }
-    input{ background:#0b1220; border-color:#334155; color:var(--text); }
+    input{ background:#0b1220; border-color:#334155; color:#e5e7eb; }
     input::placeholder{ color:#64748b; }
     #orderDetails{ background:linear-gradient(180deg,#0f172a,#0b1220); border-color:var(--border); }
     .notice{ background:#1a1f2a; border-color:#334155; color:#eab308; }
@@ -118,10 +112,6 @@
     .btn-inline button{ box-shadow:0 4px 14px rgba(0,0,0,.35); }
   }
   @media (prefers-reduced-motion: reduce){ *{ transition:none !important; animation:none !important; } }
-
-  /* REMOVE FORM BACKGROUND (requested) */
-  .form-container{ background: transparent !important; }
-  form fieldset{ background: transparent !important; border:none !important; }
 
   /* Info icon + modal */
   .info-icon{
@@ -131,9 +121,13 @@
     border:none; cursor:pointer;
   }
   .modal{ position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:9999; }
+  .modal.hidden{ display:none !important; } /* <-- ensures hidden wins */
   .modal .box{ background:#fff; color:#111827; padding:1rem 1.1rem; border-radius:12px; max-width:320px; box-shadow:0 10px 30px rgba(0,0,0,.2); text-align:center; }
   .modal .box button{ margin-top:.75rem; }
   @media (prefers-color-scheme: dark){ .modal .box{ background:#0f172a; color:#e5e7eb; } }
+
+  /* Remove watermark logo completely */
+  .form-container::after{ content:none !important; }
 </style>
 </head>
 <body>
@@ -182,7 +176,7 @@
         </div>
       </div>
 
-      <!-- Removed Address, City, Province -->
+      <!-- Address/City/Province removed -->
       <div class="form-group">
         <label for="postal">Postal Code</label>
         <input type="text" id="postal" autocomplete="postal-code" required>
@@ -243,7 +237,7 @@
   </div>
 </div>
 
-<!-- Info Modal -->
+<!-- Info Modal (starts hidden) -->
 <div id="twistInfo" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="twistInfoTitle">
   <div class="box">
     <div id="twistInfoTitle" style="font-weight:700;margin-bottom:.25rem;">TWIST Code</div>
@@ -291,8 +285,6 @@
     const last10 = digits.slice(-10);
     return last10.length === 10 ? `+1${last10}` : null;
   }
-
-  // Derive province from Canadian postal code (first letter; NU heuristic)
   function provinceFromPostal(postal){
     const s = String(postal||'').toUpperCase().replace(/\s+/g,'');
     const f = s.charAt(0), tri = s.slice(0,3);
