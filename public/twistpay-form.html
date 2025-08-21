@@ -5,113 +5,33 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>TWIST Card Payment</title>
 <style>
-  :root { --brand:#f97316; --bg:#f3f4f6; --muted:#6b7280; --ok:#16a34a; --bad:#dc2626; }
-  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); padding: 1.5rem; }
-  .form-wrapper { max-width: 540px; margin: auto; }
-  .form-container { padding: 1.5rem; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.06); position: relative; overflow: hidden; }
-  .form-group { margin-bottom: 1rem; }
+  :root { --brand:#f97316; --bg:#ffffff; --muted:#6b7280; --ok:#16a34a; --bad:#dc2626; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:#fff; padding: 1.5rem; color:#111827; }
+  .form-wrapper { max-width: 540px; margin: auto; padding-top:.25rem; }
+  .form-container { background:#fff; padding: 1.25rem; border-radius: 12px; border:1px solid #e5e7eb; box-shadow: 0 10px 30px rgba(17,24,39,.08); position: relative; overflow: hidden; }
+  .form-group { margin-bottom: 1rem; min-width:0; }
   label { font-weight: 600; display: flex; align-items:center; gap:.4rem; margin-bottom: 0.35rem; }
-  input { width: 100%; padding: .65rem .7rem; font-size: 1rem; border-radius: 8px; border: 1px solid #cfcfcf; outline: none; }
-  input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(249,115,22,.15); }
+  input { width: 100%; padding: .65rem .7rem; font-size: 1rem; border-radius: 8px; border: 1px solid #cfcfcf; outline: none; background:#fff; }
+  input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(249,115,22,.2); }
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
-  button { background: var(--brand); color: #fff; border: 0; padding: .8rem 1.1rem; border-radius: 8px; cursor: pointer; font-weight: 700; }
+  button { background: linear-gradient(180deg,var(--brand),#ea580c); color: #fff; border: 0; padding: .8rem 1.1rem; border-radius: 8px; cursor: pointer; font-weight: 800; }
   button[disabled] { opacity: .6; cursor: not-allowed; }
   .muted { color: var(--muted); font-size: .92rem; }
-  .notice { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; padding: .9rem; border-radius: 8px; margin-bottom: 1rem; }
+  .notice { background:#fff; border:1px solid #fde68a; color:#854d0e; padding:.9rem; border-radius:8px; margin-bottom:1rem; }
   .hidden { display: none; }
-  .spinner { width: 40px; height: 40px; border: 4px solid #ccc; border-top: 4px solid var(--brand); border-radius: 50%; animation: spin 1s linear infinite; margin: 1rem auto; }
+  .spinner { width: 44px; height: 44px; border: 4px solid #e5e7eb; border-top: 4px solid var(--brand); border-radius: 50%; animation: spin 1s linear infinite; margin: 1rem auto; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .ok { color: var(--ok); font-weight: 700; }
   .bad { color: var(--bad); font-weight: 700; }
-  .btn-inline { display:flex; gap:.5rem; }
-  .btn-inline button { background:#6b7280; } /* OTP buttons gray */
-  #submitBtn { text-transform: uppercase; }
-  .err { color: var(--bad); margin-top:.4rem; font-size:.9rem; }
+  .btn-inline { display:flex; gap:.5rem; align-items:stretch; flex-wrap:wrap; }
+  .btn-inline input { flex:1 1 220px; min-width:0; }
+  .btn-inline button { flex:0 0 auto; background:#6b7280; background-image:none; box-shadow:none !important; } /* OTP buttons shadow removed */
+  #submitBtn { text-transform: uppercase; letter-spacing:.04em; }
+  .err { background:#fff1f2; border:1px solid #fecdd3; color:#be123c; padding:.6rem .75rem; border-radius:8px; }
 
-  @media (max-width: 520px) { .row { grid-template-columns: 1fr; } .form-container{ padding:1rem; } }
-
-  /* ==== VISUAL THEME OVERLAY (form bg removed) ==== */
-  :root{
-    --brand-600:#ea580c;
-    --brand-700:#c2410c;
-    --ring:rgba(249,115,22,.28);
-    --surface:#fff;
-    --card:#fff;
-    --border:#e5e7eb;
-    --text:#111827;
-    --muted-text:#6b7280;
-    --btn-gray:#6b7280;
-    --btn-gray-700:#4b5563;
-  }
-  body{
-    background:radial-gradient(1200px 800px at 10% -10%, #fff7ed 0%, var(--bg) 42%);
-    color:var(--text);
-    -webkit-font-smoothing:antialiased;
-    -moz-osx-font-smoothing:grayscale;
-    text-rendering:optimizeLegibility;
-  }
-  .form-wrapper{ padding-top:.25rem; }
-  .form-wrapper h2{ font-weight:800; letter-spacing:-.02em; margin-bottom:.35rem; }
-  #orderDetails{
-    background:linear-gradient(180deg,#fff,#f8fafc);
-    border:1px solid var(--border);
-    padding:.75rem .9rem; border-radius:12px;
-    box-shadow:0 4px 16px rgba(0,0,0,.04);
-  }
-  .form-container{
-    position:relative;
-    border:1px solid var(--border);
-    border-radius:16px;
-    padding:1.25rem;
-    box-shadow:0 10px 30px rgba(17,24,39,.08);
-    overflow:hidden;
-    background: transparent !important; /* requested */
-  }
-  form fieldset{
-    background: transparent !important; /* requested */
-    border:none !important; border-radius:12px !important;
-  }
-  input{
-    background:#fff;
-    border:1px solid #d1d5db;
-    border-radius:10px;
-    transition:border-color .15s ease, box-shadow .15s ease, transform .06s ease;
-    font-size:16px; line-height:1.25rem;
-  }
-  input:hover{ border-color:#cbd5e1; }
-  input:focus{ border-color:var(--brand); box-shadow:0 0 0 4px var(--ring); transform:translateY(-1px); }
-  input::placeholder{ color:#9ca3af; }
-  button{
-    background:linear-gradient(180deg,var(--brand),var(--brand-600));
-    color:#fff; border:none; border-radius:10px;
-    box-shadow:0 6px 18px rgba(249,115,22,.22);
-    transition:transform .08s ease, box-shadow .12s ease, filter .12s ease;
-    font-size:15px; font-weight:800;
-  }
-  button:hover{ transform:translateY(-1px); filter:brightness(1.02); }
-  button:active{ transform:translateY(0); box-shadow:0 3px 12px rgba(249,115,22,.18); }
-  button[disabled]{ box-shadow:none; filter:grayscale(.12) brightness(.95); }
-  #submitBtn{ text-transform:uppercase; letter-spacing:.04em; }
-  .notice{ border-color:#fde68a; background:#fffbeb; color:#854d0e; box-shadow:0 4px 14px rgba(245,158,11,.12); }
-  .err{ background:#fff1f2; border:1px solid #fecdd3; color:#be123c; padding:.6rem .75rem; border-radius:8px; }
-  .spinner{ width:44px; height:44px; border-width:4px; }
-  #confirmationSuccess .ok{ color:#059669; }
-  #confirmationDenied .bad{ color:#dc2626; }
-
-  @media (max-width: 640px){ .row{ grid-template-columns:1fr; } .form-container{ padding:1rem; } }
-  @media (max-width: 380px){ .btn-inline{ flex-wrap:wrap; } .btn-inline button{ width:100%; } }
-  @media (prefers-color-scheme: dark){
-    :root{ --card:#0f172a; --border:#1f2937; --text:#e5e7eb; --muted-text:#94a3b8; --ring:rgba(249,115,22,.35); }
-    body{ background:radial-gradient(1200px 800px at 10% -10%, #1f2937 0%, #0b0f17 60%); color:var(--text); }
-    .form-container{ border-color:#1f2937; }
-    input{ background:#0b1220; border-color:#334155; color:#e5e7eb; }
-    input::placeholder{ color:#64748b; }
-    #orderDetails{ background:linear-gradient(180deg,#0f172a,#0b1220); border-color:var(--border); }
-    .notice{ background:#1a1f2a; border-color:#334155; color:#eab308; }
-    .err{ background:#27151a; border-color:#7f1d1d; color:#fecaca; }
-    .btn-inline button{ box-shadow:0 4px 14px rgba(0,0,0,.35); }
-  }
-  @media (prefers-reduced-motion: reduce){ *{ transition:none !important; animation:none !important; } }
+  /* Order summary and fieldset on white */
+  #orderDetails { background:#fff; border:1px solid #e5e7eb; padding:.75rem .9rem; border-radius:12px; box-shadow:none; }
+  form fieldset { background:#fff; border:1px solid #e5e7eb !important; border-radius:12px !important; }
 
   /* Info icon + modal */
   .info-icon{
@@ -121,13 +41,25 @@
     border:none; cursor:pointer;
   }
   .modal{ position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:9999; }
-  .modal.hidden{ display:none !important; } /* <-- ensures hidden wins */
+  .modal.hidden{ display:none !important; }
   .modal .box{ background:#fff; color:#111827; padding:1rem 1.1rem; border-radius:12px; max-width:320px; box-shadow:0 10px 30px rgba(0,0,0,.2); text-align:center; }
   .modal .box button{ margin-top:.75rem; }
-  @media (prefers-color-scheme: dark){ .modal .box{ background:#0f172a; color:#e5e7eb; } }
 
-  /* Remove watermark logo completely */
+  /* Kill any decorative watermark (just in case) */
   .form-container::after{ content:none !important; }
+
+  /* Responsive safety: stack fields cleanly on small screens */
+  @media (max-width: 640px){
+    .row{ grid-template-columns:1fr; }
+    .form-container{ padding:1rem; }
+    .btn-inline{ flex-wrap:wrap; }
+    .btn-inline button{ width:100%; }
+  }
+
+  /* Motion safety */
+  @media (prefers-reduced-motion: reduce){
+    *{ transition:none !important; animation:none !important; }
+  }
 </style>
 </head>
 <body>
@@ -176,7 +108,6 @@
         </div>
       </div>
 
-      <!-- Address/City/Province removed -->
       <div class="form-group">
         <label for="postal">Postal Code</label>
         <input type="text" id="postal" autocomplete="postal-code" required>
@@ -237,7 +168,7 @@
   </div>
 </div>
 
-<!-- Info Modal (starts hidden) -->
+<!-- Info Modal -->
 <div id="twistInfo" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="twistInfoTitle">
   <div class="box">
     <div id="twistInfoTitle" style="font-weight:700;margin-bottom:.25rem;">TWIST Code</div>
@@ -247,7 +178,6 @@
 </div>
 
 <script>
-  /* ------------ URL params + FALLBACKS ------------ */
   const LS_KEYS = { orderno:'twistpay:lastOrderno', amount:'twistpay:lastAmount', email:'twistpay:lastEmail' };
   function setField(id, val) { if (typeof val !== 'string' || !val.length) return; const el = document.getElementById(id); if (el) el.value = val; }
   function parseParams(url){ try { return new URL(url).searchParams; } catch { return new URLSearchParams(''); } }
@@ -279,7 +209,6 @@
     if (email)   localStorage.setItem(LS_KEYS.email, email);
   }
 
-  /* ------------ Helpers ------------ */
   function normalizePhoneToE164_CA(input) {
     const digits = String(input || '').replace(/\D/g, '');
     const last10 = digits.slice(-10);
@@ -303,7 +232,6 @@
     return '';
   }
 
-  /* ------------ Masks / inputs ------------ */
   const cardEl = document.getElementById('cardNumber');
   const expEl = document.getElementById('expiration');
   const twistEl = document.getElementById('twist');
@@ -335,7 +263,7 @@
     postalEl.value = postalEl.value.toUpperCase();
   });
 
-  /* ------------ Info modal ------------ */
+  // Info modal controls
   const infoBtn = document.getElementById('twistInfoBtn');
   const infoModal = document.getElementById('twistInfo');
   const infoClose = document.getElementById('twistInfoClose');
@@ -343,7 +271,6 @@
   infoClose.addEventListener('click', () => infoModal.classList.add('hidden'));
   infoModal.addEventListener('click', (e) => { if (e.target === infoModal) infoModal.classList.add('hidden'); });
 
-  /* ------------ OTP (lock the phone) ------------ */
   const OTP_PHONE_KEY = 'twistpay:lastOtpPhone';
   const sendOtpBtn = document.getElementById('sendOtpBtn');
   const verifyOtpBtn = document.getElementById('verifyOtpBtn');
@@ -389,7 +316,7 @@
         otpStatus.textContent = "✅ OTP verified!";
         otpStatus.style.color = "green";
         submitBtn.disabled = false;
-        phoneEl.readOnly = true; // lock phone after success
+        phoneEl.readOnly = true;
         sendOtpBtn.disabled = true;
         verifyOtpBtn.disabled = true;
       } else {
@@ -404,7 +331,6 @@
     }
   };
 
-  /* ------------ Submit with PRE-VALIDATE first, then finalize ------------ */
   function showErr(msg) {
     clientErr.textContent = msg;
     clientErr.classList.remove('hidden');
@@ -420,7 +346,6 @@
     const postal = postalEl.value.trim();
     const derivedProv = provinceFromPostal(postal);
 
-    // Basic client checks
     if (!/^\d{14}$/.test(rawCard)) return showErr('Incorrect Card Number');
     if (!rawCard.startsWith('71461567')) return showErr('Incorrect Card Number');
     if (!/^\d{4}$/.test(exp)) return showErr('Expiration must be MMYY.');
@@ -440,24 +365,21 @@
       transaction_id: transactionId,
       orderno: document.getElementById('orderno').value,
       amount: document.getElementById('amount').value,
-      cardNumber: rawCard,                // 14 digits
-      expiration: exp,                    // MMYY
+      cardNumber: rawCard,
+      expiration: exp,
       twist,
       name: document.getElementById('name').value.trim(),
       email: document.getElementById('email').value.trim(),
-      phone: lockedPhone,                 // EXACT same phone used for OTP
+      phone: lockedPhone,
       postal: postal,
-      province: derivedProv,              // derived from postal
+      province: derivedProv,
       otpCode: otpEl.value
     };
 
-    // Persist for future loads (helps embeds too)
     persistBasics({ amount: payload.amount, orderno: payload.orderno, email: payload.email });
-
     document.getElementById('loadingSpinner').classList.remove('hidden');
 
     try {
-      // 1) PRE-VALIDATE
       const pre = await fetch('https://twist-status-server.onrender.com/pre-validate', {
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
@@ -470,21 +392,17 @@
         return showErr(shown);
       }
 
-      // 2) Move to waiting screen
       document.getElementById('paymentForm').classList.add('hidden');
       document.getElementById('confirmationStep').classList.remove('hidden');
       document.getElementById('loadingSpinner').classList.add('hidden');
 
-      // Ensure spinner shows at least 3s before result
       const waitingShownAt = Date.now();
 
-      // 3) Finalize server-side
       const resp = await fetch('https://twist-status-server.onrender.com/validate-transaction', {
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
       const data = await resp.json().catch(() => ({}));
 
-      // 4) Reveal result after >= 3s total waiting
       const elapsed = Date.now() - waitingShownAt;
       const remaining = Math.max(0, 3000 - elapsed);
       setTimeout(() => {
@@ -501,7 +419,6 @@
     }
   });
 
-  /* ------------ Auto-height for iframes ------------ */
   (function () {
     function postHeight() {
       var h = document.documentElement.scrollHeight || document.body.scrollHeight || 800;
