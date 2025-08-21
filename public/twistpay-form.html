@@ -8,13 +8,12 @@
   :root { --brand:#f97316; --bg:#f3f4f6; --muted:#6b7280; --ok:#16a34a; --bad:#dc2626; }
   body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); padding: 1.5rem; }
   .form-wrapper { max-width: 540px; margin: auto; }
-  .form-container { background: #fff; padding: 1.5rem; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.06); position: relative; overflow: hidden; }
+  .form-container { padding: 1.5rem; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.06); position: relative; overflow: hidden; }
   .form-group { margin-bottom: 1rem; }
-  label { font-weight: 600; display: block; margin-bottom: 0.35rem; }
+  label { font-weight: 600; display: flex; align-items:center; gap:.4rem; margin-bottom: 0.35rem; }
   input { width: 100%; padding: .65rem .7rem; font-size: 1rem; border-radius: 8px; border: 1px solid #cfcfcf; outline: none; }
   input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(249,115,22,.15); }
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
-  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .75rem; }
   button { background: var(--brand); color: #fff; border: 0; padding: .8rem 1.1rem; border-radius: 8px; cursor: pointer; font-weight: 700; }
   button[disabled] { opacity: .6; cursor: not-allowed; }
   .muted { color: var(--muted); font-size: .92rem; }
@@ -28,17 +27,17 @@
   .btn-inline button { background:#6b7280; } /* OTP buttons gray */
   #submitBtn { text-transform: uppercase; }
   .err { color: var(--bad); margin-top:.4rem; font-size:.9rem; }
-  /* subtle watermark */
+
+  /* watermark */
   .form-container::after{
-    content:""; position:absolute; right:10px; bottom:10px; width:84px; height:84px; opacity:.08; pointer-events:none;
+    content:""; position:absolute; right:10px; bottom:20px; width:84px; height:84px; opacity:.08; pointer-events:none;
     background-image:url("https://cdn.shopify.com/s/files/1/0745/9635/2225/files/Twist_500ppx.jpg?v=1748980607");
     background-repeat:no-repeat; background-size:contain; filter:grayscale(100%);
   }
-  @media (max-width: 520px) { .row, .row3 { grid-template-columns: 1fr; } .form-container{ padding:1rem; } }
-</style>
-<!-- ==== VISUAL THEME OVERLAY (non-breaking, CSS-only) ==== -->
-<style>
-  /* Tokens */
+
+  @media (max-width: 520px) { .row { grid-template-columns: 1fr; } .form-container{ padding:1rem; } }
+
+  /* ==== VISUAL THEME OVERLAY (kept, but form bg removed below) ==== */
   :root{
     --brand-600:#ea580c;
     --brand-700:#c2410c;
@@ -51,8 +50,6 @@
     --btn-gray:#6b7280;
     --btn-gray-700:#4b5563;
   }
-
-  /* Page & wrapper */
   body{
     background:radial-gradient(1200px 800px at 10% -10%, #fff7ed 0%, var(--bg) 42%);
     color:var(--text);
@@ -61,68 +58,35 @@
     text-rendering:optimizeLegibility;
   }
   .form-wrapper{ padding-top:.25rem; }
-  .form-wrapper h2{
-    font-weight:800; letter-spacing:-.02em; margin-bottom:.35rem;
-  }
+  .form-wrapper h2{ font-weight:800; letter-spacing:-.02em; margin-bottom:.35rem; }
   #orderDetails{
     background:linear-gradient(180deg,#fff,#f8fafc);
     border:1px solid var(--border);
     padding:.75rem .9rem; border-radius:12px;
     box-shadow:0 4px 16px rgba(0,0,0,.04);
   }
-
-  /* Container & watermark logo */
   .form-container{
     position:relative;
-    background:var(--card);
     border:1px solid var(--border);
     border-radius:16px;
     padding:1.25rem;
     box-shadow:0 10px 30px rgba(17,24,39,.08);
-    overflow:hidden; /* ensures watermark respects rounded corners */
+    overflow:hidden;
   }
-  .form-container::after{
-    content:"";
-    position:absolute; right:10px; bottom:10px;
-    width:84px; height:84px; opacity:.08; pointer-events:none;
-    background-image:url("https://cdn.shopify.com/s/files/1/0745/9635/2225/files/Twist_500ppx.jpg?v=1748980607");
-    background-repeat:no-repeat; background-size:contain; filter:grayscale(100%);
-  }
-
-  /* Fieldset (order summary) */
   form fieldset{
     background:linear-gradient(180deg,#f2f6fb,#eef3f7);
     border:1px solid #e2e8f0 !important; border-radius:12px !important;
   }
-
-  /* Layout safety: never overlap */
-  .row{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.9rem; }
-  .row3{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.9rem; }
-  .form-group{ min-width:0; }
-  input, button{ min-width:0; box-sizing:border-box; }
-  .btn-inline{ display:flex; gap:.5rem; align-items:stretch; }
-  .btn-inline input{ flex:1 1 auto; min-width:0; }
-  .btn-inline button{ flex:0 0 auto; }
-
-  /* Inputs (Stripe-like) */
-  label{ font-size:.925rem; color:#374151; }
   input{
     background:#fff;
     border:1px solid #d1d5db;
     border-radius:10px;
     transition:border-color .15s ease, box-shadow .15s ease, transform .06s ease;
-    font-size:16px; /* avoids iOS zoom on focus */
-    line-height:1.25rem;
+    font-size:16px; line-height:1.25rem;
   }
   input:hover{ border-color:#cbd5e1; }
-  input:focus{
-    border-color:var(--brand);
-    box-shadow:0 0 0 4px var(--ring);
-    transform:translateY(-1px);
-  }
+  input:focus{ border-color:var(--brand); box-shadow:0 0 0 4px var(--ring); transform:translateY(-1px); }
   input::placeholder{ color:#9ca3af; }
-
-  /* Buttons */
   button{
     background:linear-gradient(180deg,var(--brand),var(--brand-600));
     color:#fff; border:none; border-radius:10px;
@@ -133,69 +97,44 @@
   button:hover{ transform:translateY(-1px); filter:brightness(1.02); }
   button:active{ transform:translateY(0); box-shadow:0 3px 12px rgba(249,115,22,.18); }
   button[disabled]{ box-shadow:none; filter:grayscale(.12) brightness(.95); }
-
-  /* OTP buttons should be gray (both Send OTP & Verify OTP live inside .btn-inline) */
-  .btn-inline button{
-    background:linear-gradient(180deg,var(--btn-gray),var(--btn-gray-700)) !important;
-    box-shadow:0 4px 14px rgba(75,85,99,.22);
-  }
-
-  /* Primary submit: uppercase */
-  #submitBtn{
-    text-transform:uppercase; letter-spacing:.04em;
-  }
-
-  /* Notice & errors */
-  .notice{
-    border-color:#fde68a; background:#fffbeb; color:#854d0e;
-    box-shadow:0 4px 14px rgba(245,158,11,.12);
-  }
-  .err{
-    background:#fff1f2; border:1px solid #fecdd3; color:#be123c;
-    padding:.6rem .75rem; border-radius:8px;
-  }
-
-  /* Spinner + results tone */
+  #submitBtn{ text-transform:uppercase; letter-spacing:.04em; }
+  .notice{ border-color:#fde68a; background:#fffbeb; color:#854d0e; box-shadow:0 4px 14px rgba(245,158,11,.12); }
+  .err{ background:#fff1f2; border:1px solid #fecdd3; color:#be123c; padding:.6rem .75rem; border-radius:8px; }
   .spinner{ width:44px; height:44px; border-width:4px; }
   #confirmationSuccess .ok{ color:#059669; }
   #confirmationDenied .bad{ color:#dc2626; }
-
-  /* Mobile-first responsiveness */
-  @media (max-width: 640px){
-    .row, .row3{ grid-template-columns:1fr; }
-    .form-container{ padding:1rem; }
-    .btn-inline{ gap:.5rem; }
-  }
-  /* For extra-narrow phones, allow wrapping instead of overflow */
-  @media (max-width: 380px){
-    .btn-inline{ flex-wrap:wrap; }
-    .btn-inline button{ width:100%; }
-  }
-
-  /* Dark mode (auto) */
+  @media (max-width: 640px){ .row{ grid-template-columns:1fr; } .form-container{ padding:1rem; } }
+  @media (max-width: 380px){ .btn-inline{ flex-wrap:wrap; } .btn-inline button{ width:100%; } }
   @media (prefers-color-scheme: dark){
-    :root{
-      --card:#0f172a; --border:#1f2937; --text:#e5e7eb; --muted-text:#94a3b8;
-      --ring:rgba(249,115,22,.35);
-    }
+    :root{ --card:#0f172a; --border:#1f2937; --text:#e5e7eb; --muted-text:#94a3b8; --ring:rgba(249,115,22,.35); }
     body{ background:radial-gradient(1200px 800px at 10% -10%, #1f2937 0%, #0b0f17 60%); color:var(--text); }
-    .form-container{ background:var(--card); border-color:var(--border); }
+    .form-container{ border-color:#1f2937; }
     form fieldset{ background:linear-gradient(180deg,#0b1220,#0b1422); border-color:#1e293b !important; }
     input{ background:#0b1220; border-color:#334155; color:var(--text); }
     input::placeholder{ color:#64748b; }
-    label{ color:#cbd5e1; }
     #orderDetails{ background:linear-gradient(180deg,#0f172a,#0b1220); border-color:var(--border); }
     .notice{ background:#1a1f2a; border-color:#334155; color:#eab308; }
     .err{ background:#27151a; border-color:#7f1d1d; color:#fecaca; }
     .btn-inline button{ box-shadow:0 4px 14px rgba(0,0,0,.35); }
   }
+  @media (prefers-reduced-motion: reduce){ *{ transition:none !important; animation:none !important; } }
 
-  /* Motion safety */
-  @media (prefers-reduced-motion: reduce){
-    *{ transition:none !important; animation:none !important; }
+  /* REMOVE FORM BACKGROUND (requested) */
+  .form-container{ background: transparent !important; }
+  form fieldset{ background: transparent !important; border:none !important; }
+
+  /* Info icon + modal */
+  .info-icon{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:18px; height:18px; border-radius:999px;
+    background:#7c3aed; color:#fff; font-size:12px; font-weight:800; line-height:1;
+    border:none; cursor:pointer;
   }
+  .modal{ position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:9999; }
+  .modal .box{ background:#fff; color:#111827; padding:1rem 1.1rem; border-radius:12px; max-width:320px; box-shadow:0 10px 30px rgba(0,0,0,.2); text-align:center; }
+  .modal .box button{ margin-top:.75rem; }
+  @media (prefers-color-scheme: dark){ .modal .box{ background:#0f172a; color:#e5e7eb; } }
 </style>
-
 </head>
 <body>
 <div class="form-wrapper">
@@ -214,7 +153,7 @@
     </div>
 
     <form id="paymentForm" autocomplete="off" novalidate>
-      <fieldset style="background:#eef3f7; padding:1rem; border:none; border-radius:10px; margin-bottom:1rem;">
+      <fieldset style="padding:1rem; border-radius:10px; margin-bottom:1rem;">
         <div class="form-group">
           <label for="orderno">Order Number</label>
           <input type="text" id="orderno" readonly aria-readonly="true">
@@ -236,29 +175,17 @@
           <input type="text" id="expiration" placeholder="MMYY" inputmode="numeric" required>
         </div>
         <div class="form-group">
-          <label for="twist">TWIST Code (XXXX)</label>
+          <label for="twist">TWIST Code (XXXX)
+            <button type="button" id="twistInfoBtn" class="info-icon" aria-haspopup="dialog" aria-controls="twistInfo" aria-label="Where to find your TWIST code">i</button>
+          </label>
           <input type="text" id="twist" maxlength="4" inputmode="numeric" required>
         </div>
       </div>
 
+      <!-- Removed Address, City, Province -->
       <div class="form-group">
-        <label for="address">Address</label>
-        <input type="text" id="address" autocomplete="address-line1">
-      </div>
-
-      <div class="row3">
-        <div class="form-group">
-          <label for="city">City</label>
-          <input type="text" id="city" autocomplete="address-level2">
-        </div>
-        <div class="form-group">
-          <label for="province">Province (2-letter)</label>
-          <input type="text" id="province" placeholder="QC" maxlength="2" autocomplete="address-level1" required>
-        </div>
-        <div class="form-group">
-          <label for="postal">Postal Code</label>
-          <input type="text" id="postal" autocomplete="postal-code" required>
-        </div>
+        <label for="postal">Postal Code</label>
+        <input type="text" id="postal" autocomplete="postal-code" required>
       </div>
 
       <div class="form-group">
@@ -286,7 +213,7 @@
           <input type="text" id="otpCode" required inputmode="numeric" placeholder="6-digit code">
           <button type="button" id="verifyOtpBtn">Verify OTP</button>
         </div>
-        <div id="otpStatus" class="muted" style="margin-top:.5rem; font-weight:700;"></div>
+        <div id="otpStatus" class="muted" style="margin-top:.5rem; font-weight:700;" aria-live="polite"></div>
       </div>
 
       <button type="submit" id="submitBtn" disabled>Submit Payment</button>
@@ -295,7 +222,7 @@
         <p>Processing your payment...</p>
       </div>
 
-      <div id="clientErr" class="err hidden"></div>
+      <div id="clientErr" class="err hidden" role="alert" aria-live="assertive"></div>
     </form>
 
     <div id="confirmationStep" class="hidden" style="text-align:center;">
@@ -316,65 +243,42 @@
   </div>
 </div>
 
+<!-- Info Modal -->
+<div id="twistInfo" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="twistInfoTitle">
+  <div class="box">
+    <div id="twistInfoTitle" style="font-weight:700;margin-bottom:.25rem;">TWIST Code</div>
+    <p>You will find your 4 digits code in the TWIST Code section of the APP</p>
+    <button type="button" id="twistInfoClose">OK</button>
+  </div>
+</div>
+
 <script>
-  /* ------------ URL params + FALLBACKS (child URL, then parent via referrer, then localStorage) ------------ */
-  const LS_KEYS = {
-    orderno: 'twistpay:lastOrderno',
-    amount:  'twistpay:lastAmount',
-    email:   'twistpay:lastEmail'
-  };
-  function setField(id, val) {
-    if (typeof val !== 'string' || !val.length) return;
-    const el = document.getElementById(id);
-    if (el) el.value = val;
-  }
-  function parseParams(url) {
-    try { return new URL(url).searchParams; } catch { return new URLSearchParams(''); }
-  }
-  function pickFrom(sp) {
-    return {
-      amount:  sp.get('t_amount')  || sp.get('amount')  || '',
-      orderno: sp.get('t_orderno') || sp.get('orderno') || '',
-      email:   sp.get('t_email')   || sp.get('email')   || ''
-    };
-  }
+  /* ------------ URL params + FALLBACKS ------------ */
+  const LS_KEYS = { orderno:'twistpay:lastOrderno', amount:'twistpay:lastAmount', email:'twistpay:lastEmail' };
+  function setField(id, val) { if (typeof val !== 'string' || !val.length) return; const el = document.getElementById(id); if (el) el.value = val; }
+  function parseParams(url){ try { return new URL(url).searchParams; } catch { return new URLSearchParams(''); } }
+  function pickFrom(sp){ return { amount: sp.get('t_amount')||sp.get('amount')||'', orderno: sp.get('t_orderno')||sp.get('orderno')||'', email: sp.get('t_email')||sp.get('email')||'' }; }
   (function initPrefill() {
     const isFramed = (window.top !== window.self);
-
-    // 1) Try this document's query string (many hosts auto-append parent params)
     const childQP = new URLSearchParams(window.location.search);
     let vals = pickFrom(childQP);
-
-    // 2) If embedded and something missing, parse parent URL from referrer
     if (isFramed && (!vals.amount || !vals.orderno || !vals.email)) {
       const parentQP = parseParams(document.referrer || '');
       const fromParent = pickFrom(parentQP);
-      vals = {
-        amount:  vals.amount  || fromParent.amount,
-        orderno: vals.orderno || fromParent.orderno,
-        email:   vals.email   || fromParent.email
-      };
+      vals = { amount: vals.amount || fromParent.amount, orderno: vals.orderno || fromParent.orderno, email: vals.email || fromParent.email };
     }
-
-    // 3) Fallback to localStorage
     if (!vals.amount)  vals.amount  = localStorage.getItem(LS_KEYS.amount)  || '';
     if (!vals.orderno) vals.orderno = localStorage.getItem(LS_KEYS.orderno) || '';
     if (!vals.email)   vals.email   = localStorage.getItem(LS_KEYS.email)   || '';
-
-    // Apply to fields
-    setField('amount',  vals.amount);
+    const amt = String(vals.amount||'').replace(/^\$/, '');
+    setField('amount',  amt);
     setField('orderno', vals.orderno);
     setField('email',   vals.email);
-
-    // Show notice only if orderno or amount missing
     if (!vals.orderno || !vals.amount) document.getElementById('autoFillNotice').classList.remove('hidden');
-
-    // Update summary
     document.getElementById('orderDetails').innerHTML =
-      `Order Number: <strong>${vals.orderno || '-'}</strong><br>Total: <strong>$${vals.amount || '-'}</strong>`;
+      `Order Number: <strong>${vals.orderno || '-'}</strong><br>Total: <strong>$${amt || '-'}</strong>`;
   })();
 
-  // Persist basics after a successful submit attempt (before calling /pre-validate)
   function persistBasics({ amount, orderno, email }) {
     if (amount)  localStorage.setItem(LS_KEYS.amount, amount);
     if (orderno) localStorage.setItem(LS_KEYS.orderno, orderno);
@@ -388,13 +292,32 @@
     return last10.length === 10 ? `+1${last10}` : null;
   }
 
+  // Derive province from Canadian postal code (first letter; NU heuristic)
+  function provinceFromPostal(postal){
+    const s = String(postal||'').toUpperCase().replace(/\s+/g,'');
+    const f = s.charAt(0), tri = s.slice(0,3);
+    if (f==='A') return 'NL';
+    if (f==='B') return 'NS';
+    if (f==='C') return 'PE';
+    if (f==='E') return 'NB';
+    if (f==='G'||f==='H'||f==='J') return 'QC';
+    if (f==='K'||f==='L'||f==='M'||f==='N'||f==='P') return 'ON';
+    if (f==='R') return 'MB';
+    if (f==='S') return 'SK';
+    if (f==='T') return 'AB';
+    if (f==='V') return 'BC';
+    if (f==='X') return /^X0[ABC]/.test(tri) ? 'NU' : 'NT';
+    if (f==='Y') return 'YT';
+    return '';
+  }
+
   /* ------------ Masks / inputs ------------ */
   const cardEl = document.getElementById('cardNumber');
   const expEl = document.getElementById('expiration');
   const twistEl = document.getElementById('twist');
-  const provEl = document.getElementById('province');
   const phoneEl = document.getElementById('otpPhone');
   const otpEl = document.getElementById('otpCode');
+  const postalEl = document.getElementById('postal');
   const clientErr = document.getElementById('clientErr');
 
   cardEl.addEventListener('input', function () {
@@ -416,9 +339,17 @@
   otpEl.addEventListener('input', () => {
     otpEl.value = otpEl.value.replace(/\D/g, '').slice(0, 6);
   });
-  provEl.addEventListener('input', () => {
-    provEl.value = provEl.value.toUpperCase().slice(0,2);
+  postalEl.addEventListener('input', () => {
+    postalEl.value = postalEl.value.toUpperCase();
   });
+
+  /* ------------ Info modal ------------ */
+  const infoBtn = document.getElementById('twistInfoBtn');
+  const infoModal = document.getElementById('twistInfo');
+  const infoClose = document.getElementById('twistInfoClose');
+  infoBtn.addEventListener('click', () => infoModal.classList.remove('hidden'));
+  infoClose.addEventListener('click', () => infoModal.classList.add('hidden'));
+  infoModal.addEventListener('click', (e) => { if (e.target === infoModal) infoModal.classList.add('hidden'); });
 
   /* ------------ OTP (lock the phone) ------------ */
   const OTP_PHONE_KEY = 'twistpay:lastOtpPhone';
@@ -457,7 +388,6 @@
     otpStatus.textContent = "Verifying...";
     otpStatus.style.color = "";
     try {
-      // Verify via status server proxy (which also caches)
       const res = await fetch('https://twist-status-server.onrender.com/otp/verify-proxy', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ phone: lockedPhone, code })
@@ -468,6 +398,8 @@
         otpStatus.style.color = "green";
         submitBtn.disabled = false;
         phoneEl.readOnly = true; // lock phone after success
+        sendOtpBtn.disabled = true;
+        verifyOtpBtn.disabled = true;
       } else {
         otpStatus.textContent = `❌ Invalid OTP${data.error ? ' – ' + data.error : ''}`;
         otpStatus.style.color = "red";
@@ -487,22 +419,22 @@
     setTimeout(() => clientErr.classList.add('hidden'), 5000);
   }
 
-  const VALID_PROV = /^(AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT)$/i;
-
   document.getElementById('paymentForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
     const rawCard = cardEl.value.replace(/\s/g, '');
     const exp = expEl.value.replace(/\D/g, '');
     const twist = twistEl.value.replace(/\D/g, '');
-    const prov = provEl.value.trim().toUpperCase();
+    const postal = postalEl.value.trim();
+    const derivedProv = provinceFromPostal(postal);
 
-    // Basic client checks (incl. prefix + province)
+    // Basic client checks
     if (!/^\d{14}$/.test(rawCard)) return showErr('Incorrect Card Number');
     if (!rawCard.startsWith('71461567')) return showErr('Incorrect Card Number');
     if (!/^\d{4}$/.test(exp)) return showErr('Expiration must be MMYY.');
     if (!/^\d{4}$/.test(twist)) return showErr('TWIST Code must be 4 digits.');
-    if (!VALID_PROV.test(prov)) return showErr('Province must be a valid 2-letter code (e.g., QC).');
+    if (!postal) return showErr('Postal Code is required.');
+    if (!derivedProv) return showErr('Postal Code must be valid in Canada.');
 
     const lockedPhone = localStorage.getItem(OTP_PHONE_KEY);
     if (!lockedPhone) return showErr('Please send and verify an OTP first.');
@@ -522,24 +454,18 @@
       name: document.getElementById('name').value.trim(),
       email: document.getElementById('email').value.trim(),
       phone: lockedPhone,                 // EXACT same phone used for OTP
-      postal: document.getElementById('postal').value.trim(),
-      address: document.getElementById('address').value.trim(),
-      city: document.getElementById('city').value.trim(),
-      province: prov,
+      postal: postal,
+      province: derivedProv,              // derived from postal
       otpCode: otpEl.value
     };
 
     // Persist for future loads (helps embeds too)
-    persistBasics({
-      amount:  payload.amount,
-      orderno: payload.orderno,
-      email:   payload.email
-    });
+    persistBasics({ amount: payload.amount, orderno: payload.orderno, email: payload.email });
 
     document.getElementById('loadingSpinner').classList.remove('hidden');
 
     try {
-      // 1) PRE-VALIDATE (checks: loan match by last6, expiration, TWIST, postal, province, amount<=credit, OTP)
+      // 1) PRE-VALIDATE
       const pre = await fetch('https://twist-status-server.onrender.com/pre-validate', {
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
@@ -548,22 +474,27 @@
       if (!pre.ok || !preData?.ok) {
         document.getElementById('loadingSpinner').classList.add('hidden');
         const msg = preData?.message || 'Validation failed.';
-        const shown = (msg === 'No matching loan found.') ? 'Incorrect Card Number' : msg; // requested wording
+        const shown = (msg === 'No matching loan found.') ? 'Incorrect Card Number' : msg;
         return showErr(shown);
       }
 
-      // 2) Move to "waiting for confirmation" screen
+      // 2) Move to waiting screen
       document.getElementById('paymentForm').classList.add('hidden');
       document.getElementById('confirmationStep').classList.remove('hidden');
       document.getElementById('loadingSpinner').classList.add('hidden');
 
-      // 3) Finalize server-side (will also POST /store-status on approval)
+      // Ensure spinner shows at least 3s before result
+      const waitingShownAt = Date.now();
+
+      // 3) Finalize server-side
       const resp = await fetch('https://twist-status-server.onrender.com/validate-transaction', {
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
       const data = await resp.json().catch(() => ({}));
 
-      // 4) Reveal result
+      // 4) Reveal result after >= 3s total waiting
+      const elapsed = Date.now() - waitingShownAt;
+      const remaining = Math.max(0, 3000 - elapsed);
       setTimeout(() => {
         document.getElementById('confirmationStep').classList.add('hidden');
         if (data && data.ok && data.status === 'approved') {
@@ -571,14 +502,14 @@
         } else {
           document.getElementById('confirmationDenied').classList.remove('hidden');
         }
-      }, 800);
+      }, remaining);
     } catch (err) {
       document.getElementById('loadingSpinner').classList.add('hidden');
       showErr("Network error: " + err.message);
     }
   });
 
-  /* ------------ Auto-height for iframes (optional but handy) ------------ */
+  /* ------------ Auto-height for iframes ------------ */
   (function () {
     function postHeight() {
       var h = document.documentElement.scrollHeight || document.body.scrollHeight || 800;
@@ -586,7 +517,7 @@
     }
     window.addEventListener("load", postHeight);
     new ResizeObserver(postHeight).observe(document.body);
-    setInterval(postHeight, 800); // handles state transitions
+    setInterval(postHeight, 800);
   })();
 </script>
 </body>
