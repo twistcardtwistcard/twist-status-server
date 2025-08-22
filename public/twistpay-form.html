@@ -284,15 +284,30 @@
   }
   function clearAllFieldErrors(){ FIELD_IDS.forEach(id => setFieldError(id, '')); }
 
+  // Stronger mapping from server messages → field ids
   function mapServerMessageToField(msg){
     const m = String(msg||'').toLowerCase();
-    if (m.includes('card')) return 'cardNumber';
-    if (m.startsWith('expiration') || m.includes('mm/yy') || m.includes('mmyy')) return 'expiration';
-    if (m.includes('twist')) return 'twist';
-    if (m.includes('postal')) return 'postal';
-    if (m.includes('email')) return 'email';
-    if (m.includes('otp')) return 'otpCode';
+    if (!m) return null;
+    if (/(card|loan)/i.test(m)) return 'cardNumber';
+    if (/(expir|mm\/?yy|mmyy)/i.test(m)) return 'expiration';
+    if (/twist/i.test(m)) return 'twist';
+    if (/postal/i.test(m)) return 'postal';
+    if (/email/i.test(m)) return 'email';
+    if (/otp|one[-\s]?time/i.test(m)) return 'otpCode';
     return null;
+  }
+
+  // Provide friendly defaults per-field if server text is generic/empty
+  function defaultMessageForField(field){
+    switch(field){
+      case 'cardNumber': return 'Incorrect Card Number';
+      case 'expiration': return 'Expiration not valid.';
+      case 'twist': return 'TWIST code incorrect.';
+      case 'postal': return 'Postal code does not match account.';
+      case 'email': return 'Email does not match account.';
+      case 'otpCode': return 'OTP must be 6 digits.';
+      default: return 'Invalid value.';
+    }
   }
 
   function showGlobalErr(msg){
@@ -476,14 +491,14 @@
       body: JSON.stringify({ cardNumber: card, expiration: exp, twist, postal })
     });
     const data = await res.json().catch(() => null);
+
     if (!res.ok || !data?.success) {
-      // Force a clear, field-specific message by defaulting to expiration per your request.
       const serverMsg = data && data.message ? String(data.message) : '';
-      // Try mapping known messages first
       const fld = mapServerMessageToField(serverMsg);
-      if (fld) throw new Error(serverMsg);
-      // Otherwise default to expiration-friendly copy
-      throw new Error('Expiration not valid.');
+      const err = new Error(serverMsg || 'Please check your details.');
+      // attach field hint (stays on the Error object)
+      err._field = fld || null;
+      throw err;
     }
     return data.phone;
   }
@@ -627,13 +642,16 @@
         canSubmitPayment = true;
         updateSubmitLabel(); // → Submit Payment
       }catch(err){
-        // Always show field-specific error. Map known messages; default to Expiration.
         const msg = String(err && err.message || '');
-        const fld = mapServerMessageToField(msg) || 'expiration';
-        const friendly = fld === 'expiration' && (!msg || /unable to/i.test(msg))
-          ? 'Expiration not valid.'
-          : (msg || 'Expiration not valid.');
-        setFieldError(fld, friendly);
+        const hinted = err && err._field ? err._field : null;
+        const fld = hinted || mapServerMessageToField(msg);
+
+        if (fld) {
+          setFieldError(fld, msg && msg.trim() ? msg : defaultMessageForField(fld));
+        } else {
+          // if truly generic, show a small global banner rather than mis-highlighting a field
+          showGlobalErr(msg || 'Please check your details.');
+        }
 
         // Clear stale phone and reset UI
         localStorage.removeItem(OTP_PHONE_KEY);
@@ -698,7 +716,7 @@
         document.getElementById('loadingSpinner').classList.add('hidden');
         const msg = preData?.message || 'Validation failed.';
         const f = mapServerMessageToField(msg);
-        if (f) setFieldError(f, msg);
+        if (f) setFieldError(f, msg && msg.trim() ? msg : defaultMessageForField(f));
         else showGlobalErr((msg === 'No matching loan found.') ? 'Incorrect Card Number' : msg);
         return;
       }
