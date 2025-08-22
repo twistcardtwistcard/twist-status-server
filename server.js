@@ -37,7 +37,7 @@ app.use((req, res, next) => {
 });
 
 /* ---------------- In-memory status + paths ---------------- */
-const statuses = {}; // { transaction_id: 'pending'|'approved'|... }
+const statuses = {}; // { transaction_id: 'pending'|'approved'|'denied' }
 
 /**
  * Robust log handling:
@@ -684,25 +684,6 @@ app.get('/code/middle4-by-phone', (req, res) => {
     const raw = readMergedLogText();
     if (!raw) return res.status(404).json({ success: false, message: 'No log file found' });
 
-    const lines = raw split('\n').filter(Boolean); // <-- will be corrected below
-  } catch (e) {
-    console.error('code/middle4-by-phone error:', e);
-    return res.status(500).json({ success: false, message: 'Server error' });
-  }
-});
-app.get('/code/middle4-by-phone', (req, res) => {
-  try {
-    const { phone } = req.query;
-    if (!phone) return res.status(400).json({ success: false, message: 'Missing phone' });
-
-    const qLast10 = last10(phone);
-    if (qLast10.length !== 10) {
-      return res.status(400).json({ success: false, message: 'Invalid phone format' });
-    }
-
-    const raw = readMergedLogText();
-    if (!raw) return res.status(404).json({ success: false, message: 'No log file found' });
-
     const lines = raw.split('\n').filter(Boolean);
 
     for (const line of lines) {
@@ -755,6 +736,7 @@ app.get('/code/middle4-by-phone', (req, res) => {
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 });
+
 app.get('/get-code', (req, res) => {
   const { loan_id, contract_expiration } = req.query;
   if (!loan_id || !contract_expiration) {
