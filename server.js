@@ -37,7 +37,7 @@ app.use((req, res, next) => {
 });
 
 /* ---------------- In-memory status + paths ---------------- */
-const statuses = {}; // { transaction_id: 'pending'|'approved'|'denied' }
+const statuses = {}; // { transaction_id: 'pending'|'approved'|... }
 
 /**
  * Robust log handling:
@@ -238,73 +238,90 @@ app.post('/otp/verify-proxy', async (req, res) => {
   }
 });
 
-/* ---------------- OTP: derive phone from card/exp/twist/postal ---------------- */
+/* ---------------- ✨ New: derive phone AFTER field checks (clear messages) ---------------- */
 app.post('/otp/derive-phone', async (req, res) => {
   try {
-    const { cardNumber, expiration, twist, postal } = req.body || {};
-    // Basic presence
-    if (!cardNumber || !expiration || !twist || !postal) {
-      return res.status(400).json({ success: false, message: 'Missing required fields' });
-    }
+    const { cardNumber, expiration, twist, postal, email } = req.body || {};
 
-    // Card checks
-    const cleanCard = String(cardNumber).replace(/\D/g, '');
+    // Normalize + basic format checks (mapped to specific fields/messages)
+    const cleanCard = String(cardNumber || '').replace(/\D/g, '');
     if (cleanCard.length !== 14 || !cleanCard.startsWith('71461567')) {
-      return res.status(400).json({ success: false, message: 'Unable to derive phone for provided details.' });
+      return res.status(400).json({ success: false, message: 'Incorrect Card Number' });
     }
 
-    // Find latest payload by "loan_id ends with last6"
+    const inExpMMYY = toMMYY(expiration);
+    if (!inExpMMYY) {
+      return res.status(400).json({ success: false, message: 'Expiration must be MMYY.' });
+    }
+
+    const inTwist = String(twist || '').replace(/\D/g, '');
+    if (!/^\d{4}$/.test(inTwist)) {
+      return res.status(400).json({ success: false, message: 'TWIST code must be 4 digits.' });
+    }
+
+    const inPostal = String(postal || '').trim().toUpperCase().replace(/\s/g, '');
+    const inEmail  = String(email  || '').trim().toLowerCase();
+
+    // Find latest payload for this loan (by card last 6)
     const last6 = cleanCard.slice(-6);
     const latest = await readLatestPayloadByLoanIdEndsWith(last6);
     if (!latest) {
-      return res.status(400).json({ success: false, message: 'Unable to derive phone for provided details.' });
+      return res.status(400).json({ success: false, message: 'Incorrect Card Number' });
     }
 
-    // Pull reference fields from the matched entry
-    const loanId       = String(latest.loan_id || '');
-    const acPostalRaw  = String(latest.postal_code || latest.postal || '').toUpperCase().replace(/\s/g, '');
-    const acExpiryRaw  = String(latest.contract_expiration || ''); // may be MM/YY, MMYY, or YYYY-MM-DD
+    const loanId      = String(latest.loan_id || '');
+    const acEmail     = String(latest.email || latest.customer_email || '').trim().toLowerCase();
+    const acPostal    = String(latest.postal_code || latest.postal || '').trim().toUpperCase().replace(/\s/g, '');
+    const acExpiryRaw = String(latest.contract_expiration || '');
+    const acExpMMYY   = toMMYY(acExpiryRaw);
 
-    // Normalize inputs
-    const inPostal = String(postal).toUpperCase().replace(/\s/g, '');
-    const inExpMMYY = toMMYY(expiration);
-    const refMMYY   = toMMYY(acExpiryRaw);
-
-    if (!inExpMMYY || !refMMYY || inExpMMYY !== refMMYY) {
-      return res.status(400).json({ success: false, message: 'Unable to derive phone for provided details.' });
+    // 1) Expiration must match
+    if (acExpMMYY && inExpMMYY !== acExpMMYY) {
+      return res.status(400).json({ success: false, message: 'Expiration does not match contract.' });
     }
 
-    if (acPostalRaw && inPostal !== acPostalRaw) {
-      return res.status(400).json({ success: false, message: 'Unable to derive phone for provided details.' });
-    }
-
-    // Verify TWIST middle-4 from code.json (loan_id + expiration variants)
+    // 2) TWIST middle 4 must match (deterministic code from code.json)
     let fullCode = null;
-    if (fs.existsSync(twistCodePath)) {
-      try {
+    try {
+      if (fs.existsSync(twistCodePath)) {
         const data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
         const hit = findTwistByLoanAndExpVariants(loanId, acExpiryRaw, data);
         if (hit) fullCode = hit.twistcode;
-      } catch (e) {
-        console.error('derive-phone code.json read error:', e);
       }
+    } catch {}
+    if (!fullCode && loanId && acExpiryRaw) {
+      // ensure a deterministic code exists for this pair
+      fullCode = getOrGenerateTwistCode(loanId, acExpiryRaw);
     }
     const mid4 = middle4Of(fullCode);
-    if (!mid4 || String(twist) !== mid4) {
-      return res.status(400).json({ success: false, message: 'Unable to derive phone for provided details.' });
+    if (!mid4 || mid4 !== inTwist) {
+      return res.status(400).json({ success: false, message: 'TWIST code incorrect.' });
     }
 
-    // Extract a phone from the entry (any "*phone*" field), normalize to E.164 +1
-    const candidates = phonesFromEntry(latest);
-    const norm = candidates.map(normE164CA).find(Boolean);
-    if (!norm) {
-      return res.status(404).json({ success: false, message: 'No phone available for this loan.' });
+    // 3) Postal must match
+    if (acPostal && inPostal !== acPostal) {
+      return res.status(400).json({ success: false, message: 'Postal code does not match account.' });
     }
 
-    // Success
-    return res.json({ success: true, phone: norm });
+    // 4) Email must match (if on file and provided)
+    if (acEmail && inEmail && inEmail !== acEmail) {
+      return res.status(400).json({ success: false, message: 'Email does not match account.' });
+    }
+
+    // All details validated → now (and only now) reveal phone for OTP
+    const phones = phonesFromEntry(latest);
+    let phone = null;
+    for (const p of phones) {
+      const norm = normE164CA(p);
+      if (norm) { phone = norm; break; }
+    }
+    if (!phone) {
+      return res.status(404).json({ success: false, message: 'No phone on file.' });
+    }
+
+    return res.json({ success: true, phone, loan_id: loanId });
   } catch (e) {
-    console.error('otp/derive-phone error:', e);
+    console.error('/otp/derive-phone error', e);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 });
@@ -327,7 +344,7 @@ app.post('/pre-validate', async (req, res) => {
       otpCode
     } = req.body || {};
 
-    // Presence (kept light; client enforces province required)
+    // Presence (kept light; client enforces province required when used)
     if (!transaction_id || !orderno || !amount || !cardNumber || !expiration || !twist || !email || !phone || !postal || !otpCode) {
       return res.status(400).json({ ok: false, message: 'Missing required fields.' });
     }
@@ -340,7 +357,7 @@ app.post('/pre-validate', async (req, res) => {
     // Map last 6 -> latest payload for that loan
     const last6 = cleanCard.slice(-6);
     const latest = await readLatestPayloadByLoanIdEndsWith(last6);
-    if (!latest) return res.json({ ok: false, message: 'Incorrect Card Number' }); // PATCH: wording
+    if (!latest) return res.json({ ok: false, message: 'Incorrect Card Number' }); // requested wording
 
     const loanId = String(latest.loan_id || '');
     const acEmail = String(latest.email || latest.customer_email || '').trim().toLowerCase();
