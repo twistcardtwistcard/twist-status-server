@@ -28,7 +28,7 @@
     padding:.75rem .9rem;
   }
 
-  /* Card container (no watermark logo) */
+  /* Card container */
   .form-container{
     background:#fff; border:1px solid var(--border); border-radius:16px;
     padding:1.25rem; box-shadow:none; position:relative; overflow:hidden;
@@ -63,7 +63,7 @@
   .btn-inline input{ flex:1 1 auto; min-width:0; }
   .btn-inline button{ flex:0 0 auto; box-shadow:none !important; } /* no shadows on OTP buttons */
 
-  /* Secondary (gray) buttons like RESEND OTP & VERIFY OTP */
+  /* Secondary (gray) buttons like SEND/RESEND OTP & VERIFY OTP */
   .btn-secondary{
     background:linear-gradient(180deg,var(--btn-gray),var(--btn-gray-700)) !important;
   }
@@ -180,12 +180,12 @@
         <input type="email" id="email" required autocomplete="email">
       </div>
 
-      <!-- OTP SECTION (hidden until first submit verifies details) -->
+      <!-- OTP SECTION (hidden until "verify only" succeeds) -->
       <div id="otpSection" class="hidden">
         <div class="form-group">
-          <label id="sendOtpLabel" class="muted">Code will be sent to phone ending with ••••</label>
+          <label id="sendOtpLabel" class="muted">Send a code to phone ending with ••••</label>
           <div class="btn-inline">
-            <button type="button" id="sendOtpBtn" class="btn-secondary">Resend OTP</button>
+            <button type="button" id="sendOtpBtn" class="btn-secondary">Send OTP</button>
             <div id="resendTimer" class="muted" style="align-self:center;"></div>
           </div>
           <div id="sendOtpNote" class="muted" style="margin-top:.35rem;"></div>
@@ -205,7 +205,7 @@
 
       <!-- Single primary action -->
       <div style="margin-top:.25rem;">
-        <button type="submit" id="submitBtn">Submit (Verify & Send OTP)</button>
+        <button type="submit" id="submitBtn">Submit (Verify Only)</button>
       </div>
 
       <div id="loadingSpinner" class="hidden" style="text-align:center; margin-top: 1rem;">
@@ -314,12 +314,8 @@
     localStorage.setItem(OTP_VF_TS_KEY, String(Date.now()));
     updateSubmitLabel();
   }
-  function updateSubmitLabel(){
-    const submitBtn = document.getElementById('submitBtn');
-    submitBtn.textContent = isVerifiedFresh() ? 'Submit Payment' : 'Submit (Verify & Send OTP)';
-  }
 
-  /* ------------ Masks / inputs ------------ */
+  /* ------------ Inputs / elements ------------ */
   const cardEl = document.getElementById('cardNumber');
   const expEl = document.getElementById('expiration');
   const twistEl = document.getElementById('twist');
@@ -337,8 +333,18 @@
   const otpStatus = document.getElementById('otpStatus');
   const submitBtn = document.getElementById('submitBtn');
 
+  let canSubmitPayment = false; // phase flag
+
+  function updateSubmitLabel(){
+    // If we already have a fresh verified OTP and a phone, allow direct submit
+    const havePhone = !!localStorage.getItem(OTP_PHONE_KEY);
+    const haveFresh = isVerifiedFresh() && /^\d{6}$/.test(localStorage.getItem(OTP_CODE_KEY) || '');
+    canSubmitPayment = canSubmitPayment || (havePhone && haveFresh);
+    submitBtn.textContent = canSubmitPayment ? 'Submit Payment' : 'Submit (Verify Only)';
+  }
   updateSubmitLabel();
 
+  /* ------------ masks ------------ */
   cardEl.addEventListener('input', function () {
     let v = this.value.replace(/\D/g, '');
     if (v.length > 14) v = v.slice(0, 14);
@@ -376,6 +382,7 @@
         cooldownTimer = null;
         resendTimerEl.textContent = '';
         sendOtpBtn.disabled = false;
+        sendOtpBtn.textContent = 'Resend OTP';
       } else {
         resendTimerEl.textContent = `Resend available in ${remain}s`;
       }
@@ -411,8 +418,10 @@
     }
     return data.phone;
   }
+
   async function sendOtp(phone){
     sendOtpBtn.disabled = true;
+    sendOtpBtn.textContent = 'Sending...';
     sendOtpNote.textContent = 'Sending...';
     try{
       const res = await fetch('https://twilio-otp-server.onrender.com/send-otp', {
@@ -426,17 +435,19 @@
       } else {
         sendOtpNote.textContent = 'Error sending OTP: ' + (data.error || 'Unknown error');
         sendOtpBtn.disabled = false;
+        sendOtpBtn.textContent = 'Send OTP';
       }
     }catch(e){
       sendOtpNote.textContent = 'Network error: ' + e.message;
       sendOtpBtn.disabled = false;
+      sendOtpBtn.textContent = 'Send OTP';
     }
   }
 
   /* ------------ VERIFY OTP button ------------ */
   verifyOtpBtn.onclick = async () => {
     const phone = localStorage.getItem(OTP_PHONE_KEY);
-    if (!phone) return showErr('Please press Submit to verify & send OTP first.');
+    if (!phone) return showErr('Please press Submit (Verify Only) first.');
     const code = String(otpEl.value || '').trim();
     if (!/^\d{6}$/.test(code)) return showErr('Enter the 6-digit OTP code.');
 
@@ -471,7 +482,7 @@
     }
   };
 
-  /* ------------ SUBMIT: dual-mode ------------- */
+  /* ------------ Primary SUBMIT: two phases ------------ */
   document.getElementById('paymentForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
@@ -480,34 +491,68 @@
     const twist = twistEl.value.replace(/\D/g, '');
     const postal = postalEl.value.trim().toUpperCase().replace(/\s/g,'');
 
-    // 1) Basic client checks
+    // Client format checks BEFORE any server call
     if (!/^\d{14}$/.test(rawCard) || !rawCard.startsWith('71461567')) return showErr('Incorrect Card Number');
     if (!/^\d{4}$/.test(exp)) return showErr('Expiration must be MMYY.');
     if (!/^\d{4}$/.test(twist)) return showErr('TWIST Code must be 4 digits.');
     if (!postal) return showErr('Postal code required.');
 
-    const phone = localStorage.getItem(OTP_PHONE_KEY);
-    const fresh = isVerifiedFresh();
-    const storedCode = localStorage.getItem(OTP_CODE_KEY) || '';
+    if (!canSubmitPayment) {
+      // PHASE 1: verify-only (no OTP sent here)
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Verifying...';
+      try{
+        // Always derive from server to ensure details truly match before revealing OTP
+        const phone = await derivePhone(rawCard, exp, twist, postal);
+        // Save & prepare OTP UI
+        localStorage.setItem(OTP_PHONE_KEY, phone);
+        sendOtpLabel.textContent = `Send a code to phone ending with ${last4(phone)}`;
+        otpSection.classList.remove('hidden');
+        sendOtpBtn.disabled = false;
+        sendOtpBtn.textContent = 'Send OTP';
+        sendOtpNote.textContent = '';
+        otpStatus.textContent = '';
 
-    // MODE A — already verified within TTL → proceed to payment
-    if (phone && fresh && /^\d{6}$/.test(storedCode)) {
-      await proceedPayment({ rawCard, exp, twist, postal, phone, otpCode: storedCode });
+        // If a fresh verified OTP exists, keep it and allow direct submit
+        if (isVerifiedFresh() && /^\d{6}$/.test(localStorage.getItem(OTP_CODE_KEY) || '')) {
+          const prevCode = localStorage.getItem(OTP_CODE_KEY);
+          otpEl.value = prevCode;
+          otpStatus.textContent = '✅ OTP previously verified (still valid).';
+          otpStatus.style.color = 'green';
+        } else {
+          otpEl.value = '';
+        }
+
+        canSubmitPayment = true;
+        updateSubmitLabel(); // → Submit Payment
+      }catch(err){
+        showErr(err.message);
+        // Clear stale phone to avoid accidental sends later
+        localStorage.removeItem(OTP_PHONE_KEY);
+        otpSection.classList.add('hidden');
+        canSubmitPayment = false;
+        submitBtn.textContent = 'Submit (Verify Only)';
+      }finally{
+        submitBtn.disabled = false;
+      }
       return;
     }
 
-    // MODE B — first click / not verified yet → derive phone, reveal OTP, auto-send, rename button
-    try{
-      const derivedPhone = phone || await derivePhone(rawCard, exp, twist, postal);
-      localStorage.setItem(OTP_PHONE_KEY, derivedPhone);
-      sendOtpLabel.textContent = `Code will be sent to phone ending with ${last4(derivedPhone)}`;
-      otpSection.classList.remove('hidden');
-      if (!phone) { await sendOtp(derivedPhone); } // auto-send once
-      updateSubmitLabel(); // becomes "Submit Payment"
-      if (!fresh) showErr('Check your phone, enter the code, and tap “Verify OTP”. Then click “Submit Payment”.');
-    }catch(err){
-      showErr(err.message);
+    // PHASE 2: submit payment (requires OTP)
+    const phone = localStorage.getItem(OTP_PHONE_KEY);
+    const otpCode = String(otpEl.value || localStorage.getItem(OTP_CODE_KEY) || '').trim();
+    if (!phone) {
+      showErr('Please verify your details first.');
+      canSubmitPayment = false;
+      updateSubmitLabel();
+      return;
     }
+    if (!/^\d{6}$/.test(otpCode)) {
+      showErr('Please enter the 6-digit OTP, then click Verify OTP.');
+      return;
+    }
+
+    await proceedPayment({ rawCard, exp, twist, postal, phone, otpCode });
   });
 
   async function proceedPayment({ rawCard, exp, twist, postal, phone, otpCode }){
@@ -534,7 +579,7 @@
     document.getElementById('loadingSpinner').classList.remove('hidden');
 
     try {
-      // PRE-VALIDATE
+      // PRE-VALIDATE (enforces email/phone/postal/expiration/twist/credit & re-checks OTP with server cache)
       const pre = await fetch('/pre-validate', {
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
@@ -544,7 +589,6 @@
         document.getElementById('loadingSpinner').classList.add('hidden');
         const msg = preData?.message || 'Validation failed.';
         const shown = (msg === 'No matching loan found.') ? 'Incorrect Card Number' : msg;
-        updateSubmitLabel();
         return showErr(shown);
       }
 
@@ -570,10 +614,16 @@
       }, 3000);
     } catch (err) {
       document.getElementById('loadingSpinner').classList.add('hidden');
-      updateSubmitLabel();
       showErr("Network error: " + err.message);
     }
   }
+
+  /* ------------ Send OTP button ------------ */
+  sendOtpBtn.onclick = async () => {
+    const phone = localStorage.getItem(OTP_PHONE_KEY);
+    if (!phone) return showErr('Please click Submit (Verify Only) first.');
+    await sendOtp(phone);
+  };
 
   /* ------------ Stable auto-height for iframes (content-only, no drift) ------------ */
   (function () {
