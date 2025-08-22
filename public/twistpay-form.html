@@ -83,6 +83,15 @@
     padding:.6rem .75rem; border-radius:8px; margin-top:.5rem;
   }
 
+  /* Field-level error */
+  .err-inline{
+    color:var(--bad); font-size:.86rem; margin-top:.35rem;
+  }
+  .input-error{
+    border-color:var(--bad) !important;
+    box-shadow:0 0 0 3px rgba(220,38,38,.15) !important;
+  }
+
   /* Info icon (TWIST) */
   .info-btn{
     all:unset; display:inline-flex; align-items:center; justify-content:center;
@@ -152,32 +161,38 @@
       <div class="form-group">
         <label for="cardNumber">Card Number</label>
         <input type="text" id="cardNumber" maxlength="17" inputmode="numeric" required placeholder="(14 digits)">
+        <div id="cardNumber_err" class="err-inline hidden"></div>
       </div>
 
       <div class="row">
         <div class="form-group">
           <label for="expiration">Expiration (MMYY)</label>
           <input type="text" id="expiration" placeholder="MMYY" inputmode="numeric" required>
+          <div id="expiration_err" class="err-inline hidden"></div>
         </div>
         <div class="form-group">
           <label for="twist">TWIST Code (XXXX) <button type="button" class="info-btn" id="twistInfoBtn" aria-label="What is TWIST code?">i</button></label>
           <input type="text" id="twist" maxlength="4" inputmode="numeric" required>
+          <div id="twist_err" class="err-inline hidden"></div>
         </div>
       </div>
 
       <div class="form-group">
         <label for="postal">Postal Code</label>
         <input type="text" id="postal" autocomplete="postal-code" required>
+        <div id="postal_err" class="err-inline hidden"></div>
       </div>
 
       <div class="form-group">
         <label for="name">Cardholder Name</label>
         <input type="text" id="name" required autocomplete="cc-name">
+        <div id="name_err" class="err-inline hidden"></div>
       </div>
 
       <div class="form-group">
         <label for="email">Email (must match your account)</label>
         <input type="email" id="email" required autocomplete="email">
+        <div id="email_err" class="err-inline hidden"></div>
       </div>
 
       <!-- OTP SECTION (hidden until "verify only" succeeds) -->
@@ -197,6 +212,7 @@
             <input type="text" id="otpCode" inputmode="numeric" placeholder="6-digit code">
             <button type="button" id="verifyOtpBtn" class="btn-secondary">Verify OTP</button>
           </div>
+          <div id="otpCode_err" class="err-inline hidden"></div>
           <div id="otpStatus" class="muted" style="margin-top:.5rem; font-weight:700;"></div>
         </div>
       </div>
@@ -248,6 +264,48 @@
   const RESEND_SECONDS = 45;
   const MAX_VERIFY_ATTEMPTS = 5;
 
+  /* ------------ Field-error helpers ------------ */
+  const FIELD_IDS = ['cardNumber','expiration','twist','postal','name','email','otpCode'];
+  function setFieldError(id, msg){
+    const input = document.getElementById(id);
+    const err = document.getElementById(id + '_err');
+    if (!input || !err) return;
+    if (msg){
+      err.textContent = msg;
+      err.classList.remove('hidden');
+      input.classList.add('input-error');
+      input.setAttribute('aria-invalid','true');
+    } else {
+      err.textContent = '';
+      err.classList.add('hidden');
+      input.classList.remove('input-error');
+      input.removeAttribute('aria-invalid');
+    }
+  }
+  function clearAllFieldErrors(){ FIELD_IDS.forEach(id => setFieldError(id, '')); }
+
+  function mapServerMessageToField(msg){
+    const m = String(msg||'').toLowerCase();
+    if (m.includes('card')) return 'cardNumber';
+    if (m.startsWith('expiration') || m.includes('mm/yy') || m.includes('mmyy')) return 'expiration';
+    if (m.includes('twist')) return 'twist';
+    if (m.includes('postal')) return 'postal';
+    if (m.includes('email')) return 'email';
+    if (m.includes('otp')) return 'otpCode';
+    return null;
+  }
+
+  function showGlobalErr(msg){
+    const clientErr = document.getElementById('clientErr');
+    clientErr.textContent = msg;
+    clientErr.classList.remove('hidden');
+    setTimeout(() => clientErr.classList.add('hidden'), 5000);
+  }
+
+  function scrollToTop(){
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0,0); }
+  }
+
   function setField(id, val) {
     if (typeof val !== 'string' || !val.length) return;
     const el = document.getElementById(id);
@@ -298,12 +356,6 @@
 
   /* ------------ Helpers ------------ */
   const last4 = (p) => (String(p||'').replace(/\D/g,'').slice(-4));
-  function showErr(msg) {
-    const clientErr = document.getElementById('clientErr');
-    clientErr.textContent = msg;
-    clientErr.classList.remove('hidden');
-    setTimeout(() => clientErr.classList.add('hidden'), 5000);
-  }
   function isVerifiedFresh(){
     const ts = Number(localStorage.getItem(OTP_VF_TS_KEY) || 0);
     return !!ts && (Date.now() - ts) < OTP_TTL_MS;
@@ -336,7 +388,6 @@
   let canSubmitPayment = false; // phase flag
 
   function updateSubmitLabel(){
-    // If we already have a fresh verified OTP and a phone, allow direct submit
     const havePhone = !!localStorage.getItem(OTP_PHONE_KEY);
     const haveFresh = isVerifiedFresh() && /^\d{6}$/.test(localStorage.getItem(OTP_CODE_KEY) || '');
     canSubmitPayment = canSubmitPayment || (havePhone && haveFresh);
@@ -344,7 +395,17 @@
   }
   updateSubmitLabel();
 
-  /* ------------ masks ------------ */
+  /* ------------ masks & on-type clear error ------------ */
+  function clearOnInput(el, fieldId){
+    el.addEventListener('input', () => setFieldError(fieldId, ''));
+  }
+  clearOnInput(cardEl,'cardNumber');
+  clearOnInput(expEl,'expiration');
+  clearOnInput(twistEl,'twist');
+  clearOnInput(postalEl,'postal');
+  clearOnInput(nameEl,'name');
+  clearOnInput(emailEl,'email');
+
   cardEl.addEventListener('input', function () {
     let v = this.value.replace(/\D/g, '');
     if (v.length > 14) v = v.slice(0, 14);
@@ -357,8 +418,10 @@
   twistEl.addEventListener('input', function () {
     this.value = this.value.replace(/\D/g, '').slice(0, 4);
   });
+
   otpEl.addEventListener('input', () => {
     otpEl.value = otpEl.value.replace(/\D/g, '').slice(0, 6);
+    setFieldError('otpCode','');
   });
 
   /* ------------ TWIST info dialog ------------ */
@@ -447,13 +510,14 @@
   /* ------------ VERIFY OTP button ------------ */
   verifyOtpBtn.onclick = async () => {
     const phone = localStorage.getItem(OTP_PHONE_KEY);
-    if (!phone) return showErr('Please press Submit (Verify Only) first.');
+    if (!phone) return setFieldError('otpCode','Please press Submit (Verify Only) first.');
     const code = String(otpEl.value || '').trim();
-    if (!/^\d{6}$/.test(code)) return showErr('Enter the 6-digit OTP code.');
+    if (!/^\d{6}$/.test(code)) return setFieldError('otpCode','OTP must be 6 digits.');
 
     const attempts = incAttempts(phone);
     if (attempts > MAX_VERIFY_ATTEMPTS) {
-      otpStatus.textContent = '❌ Too many attempts. Please try again later.';
+      setFieldError('otpCode','Too many attempts. Please try again later.');
+      otpStatus.textContent = '❌ Too many attempts.';
       otpStatus.style.color = 'red';
       verifyOtpBtn.disabled = true;
       return;
@@ -470,17 +534,53 @@
       if (data.success) {
         otpStatus.textContent = '✅ OTP verified!';
         otpStatus.style.color = 'green';
+        setFieldError('otpCode','');
         markVerified(phone, code);
         resetAttempts(phone);
       } else {
+        setFieldError('otpCode','Invalid OTP.');
         otpStatus.textContent = '❌ Invalid OTP' + (data.message ? ' – ' + data.message : '');
         otpStatus.style.color = 'red';
       }
     }catch(e){
+      setFieldError('otpCode','Network error verifying OTP.');
       otpStatus.textContent = 'Network error: ' + e.message;
       otpStatus.style.color = 'red';
     }
   };
+
+  /* ------------ Client checks (field-level) ----------- */
+  function clientBasicsValid(rawCard, exp, twist, postal){
+    let ok = true;
+    clearAllFieldErrors();
+
+    if (!/^\d{14}$/.test(rawCard) || !rawCard.startsWith('71461567')) {
+      setFieldError('cardNumber','Incorrect Card Number');
+      ok = false;
+    }
+    if (!/^\d{4}$/.test(exp)) {
+      setFieldError('expiration','Expiration must be MMYY.');
+      ok = false;
+    }
+    if (!/^\d{4}$/.test(twist)) {
+      setFieldError('twist','TWIST Code must be 4 digits.');
+      ok = false;
+    }
+    if (!postal) {
+      setFieldError('postal','Postal code required.');
+      ok = false;
+    }
+    if (!document.getElementById('name').value.trim()){
+      setFieldError('name','Cardholder name is required.');
+      ok = false;
+    }
+    const emailVal = document.getElementById('email').value.trim();
+    if (!emailVal){
+      setFieldError('email','Email is required.');
+      ok = false;
+    }
+    return ok;
+  }
 
   /* ------------ Primary SUBMIT: two phases ------------ */
   document.getElementById('paymentForm').addEventListener('submit', async (e) => {
@@ -491,20 +591,15 @@
     const twist = twistEl.value.replace(/\D/g, '');
     const postal = postalEl.value.trim().toUpperCase().replace(/\s/g,'');
 
-    // Client format checks BEFORE any server call
-    if (!/^\d{14}$/.test(rawCard) || !rawCard.startsWith('71461567')) return showErr('Incorrect Card Number');
-    if (!/^\d{4}$/.test(exp)) return showErr('Expiration must be MMYY.');
-    if (!/^\d{4}$/.test(twist)) return showErr('TWIST Code must be 4 digits.');
-    if (!postal) return showErr('Postal code required.');
+    if (!clientBasicsValid(rawCard, exp, twist, postal)) return;
 
     if (!canSubmitPayment) {
       // PHASE 1: verify-only (no OTP sent here)
       submitBtn.disabled = true;
       submitBtn.textContent = 'Verifying...';
       try{
-        // Always derive from server to ensure details truly match before revealing OTP
         const phone = await derivePhone(rawCard, exp, twist, postal);
-        // Save & prepare OTP UI
+        // Success → reveal OTP UI, do NOT send automatically
         localStorage.setItem(OTP_PHONE_KEY, phone);
         sendOtpLabel.textContent = `Send a code to phone ending with ${last4(phone)}`;
         otpSection.classList.remove('hidden');
@@ -526,7 +621,10 @@
         canSubmitPayment = true;
         updateSubmitLabel(); // → Submit Payment
       }catch(err){
-        showErr(err.message);
+        // Map server error to field if possible
+        const f = mapServerMessageToField(err.message);
+        if (f) setFieldError(f, err.message);
+        else showGlobalErr(err.message);
         // Clear stale phone to avoid accidental sends later
         localStorage.removeItem(OTP_PHONE_KEY);
         otpSection.classList.add('hidden');
@@ -542,13 +640,13 @@
     const phone = localStorage.getItem(OTP_PHONE_KEY);
     const otpCode = String(otpEl.value || localStorage.getItem(OTP_CODE_KEY) || '').trim();
     if (!phone) {
-      showErr('Please verify your details first.');
+      showGlobalErr('Please verify your details first.');
       canSubmitPayment = false;
       updateSubmitLabel();
       return;
     }
     if (!/^\d{6}$/.test(otpCode)) {
-      showErr('Please enter the 6-digit OTP, then click Verify OTP.');
+      setFieldError('otpCode','OTP must be 6 digits.');
       return;
     }
 
@@ -577,9 +675,10 @@
 
     persistBasics({ amount: payload.amount, orderno: payload.orderno, email: payload.email });
     document.getElementById('loadingSpinner').classList.remove('hidden');
+    scrollToTop(); // <-- ensure spinner is visible instantly
 
     try {
-      // PRE-VALIDATE (enforces email/phone/postal/expiration/twist/credit & re-checks OTP with server cache)
+      // PRE-VALIDATE (server checks & OTP confirm)
       const pre = await fetch('/pre-validate', {
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
@@ -588,14 +687,17 @@
       if (!pre.ok || !preData?.ok) {
         document.getElementById('loadingSpinner').classList.add('hidden');
         const msg = preData?.message || 'Validation failed.';
-        const shown = (msg === 'No matching loan found.') ? 'Incorrect Card Number' : msg;
-        return showErr(shown);
+        const f = mapServerMessageToField(msg);
+        if (f) setFieldError(f, msg);
+        else showGlobalErr((msg === 'No matching loan found.') ? 'Incorrect Card Number' : msg);
+        return;
       }
 
       // Waiting screen
       document.getElementById('paymentForm').classList.add('hidden');
       document.getElementById('confirmationStep').classList.remove('hidden');
       document.getElementById('loadingSpinner').classList.add('hidden');
+      scrollToTop(); // <-- ensure confirmation step is visible
 
       // Finalize
       const resp = await fetch('/validate-transaction', {
@@ -611,17 +713,18 @@
         } else {
           document.getElementById('confirmationDenied').classList.remove('hidden');
         }
+        scrollToTop();
       }, 3000);
     } catch (err) {
       document.getElementById('loadingSpinner').classList.add('hidden');
-      showErr("Network error: " + err.message);
+      showGlobalErr("Network error: " + err.message);
     }
   }
 
   /* ------------ Send OTP button ------------ */
   sendOtpBtn.onclick = async () => {
     const phone = localStorage.getItem(OTP_PHONE_KEY);
-    if (!phone) return showErr('Please click Submit (Verify Only) first.');
+    if (!phone) return showGlobalErr('Please click Submit (Verify Only) first.');
     await sendOtp(phone);
   };
 
