@@ -238,6 +238,77 @@ app.post('/otp/verify-proxy', async (req, res) => {
   }
 });
 
+/* ---------------- OTP: derive phone from card/exp/twist/postal ---------------- */
+app.post('/otp/derive-phone', async (req, res) => {
+  try {
+    const { cardNumber, expiration, twist, postal } = req.body || {};
+    // Basic presence
+    if (!cardNumber || !expiration || !twist || !postal) {
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    }
+
+    // Card checks
+    const cleanCard = String(cardNumber).replace(/\D/g, '');
+    if (cleanCard.length !== 14 || !cleanCard.startsWith('71461567')) {
+      return res.status(400).json({ success: false, message: 'Unable to derive phone for provided details.' });
+    }
+
+    // Find latest payload by "loan_id ends with last6"
+    const last6 = cleanCard.slice(-6);
+    const latest = await readLatestPayloadByLoanIdEndsWith(last6);
+    if (!latest) {
+      return res.status(400).json({ success: false, message: 'Unable to derive phone for provided details.' });
+    }
+
+    // Pull reference fields from the matched entry
+    const loanId       = String(latest.loan_id || '');
+    const acPostalRaw  = String(latest.postal_code || latest.postal || '').toUpperCase().replace(/\s/g, '');
+    const acExpiryRaw  = String(latest.contract_expiration || ''); // may be MM/YY, MMYY, or YYYY-MM-DD
+
+    // Normalize inputs
+    const inPostal = String(postal).toUpperCase().replace(/\s/g, '');
+    const inExpMMYY = toMMYY(expiration);
+    const refMMYY   = toMMYY(acExpiryRaw);
+
+    if (!inExpMMYY || !refMMYY || inExpMMYY !== refMMYY) {
+      return res.status(400).json({ success: false, message: 'Unable to derive phone for provided details.' });
+    }
+
+    if (acPostalRaw && inPostal !== acPostalRaw) {
+      return res.status(400).json({ success: false, message: 'Unable to derive phone for provided details.' });
+    }
+
+    // Verify TWIST middle-4 from code.json (loan_id + expiration variants)
+    let fullCode = null;
+    if (fs.existsSync(twistCodePath)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
+        const hit = findTwistByLoanAndExpVariants(loanId, acExpiryRaw, data);
+        if (hit) fullCode = hit.twistcode;
+      } catch (e) {
+        console.error('derive-phone code.json read error:', e);
+      }
+    }
+    const mid4 = middle4Of(fullCode);
+    if (!mid4 || String(twist) !== mid4) {
+      return res.status(400).json({ success: false, message: 'Unable to derive phone for provided details.' });
+    }
+
+    // Extract a phone from the entry (any "*phone*" field), normalize to E.164 +1
+    const candidates = phonesFromEntry(latest);
+    const norm = candidates.map(normE164CA).find(Boolean);
+    if (!norm) {
+      return res.status(404).json({ success: false, message: 'No phone available for this loan.' });
+    }
+
+    // Success
+    return res.json({ success: true, phone: norm });
+  } catch (e) {
+    console.error('otp/derive-phone error:', e);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 /* ---------------- PRE-VALIDATE (rules + OTP) ---------------- */
 app.post('/pre-validate', async (req, res) => {
   try {
@@ -642,7 +713,7 @@ app.get('/code/middle4-by-phone', (req, res) => {
         }
         const middle4 = String(hit.twistcode).slice(4, 8);
 
-        const tsStart = line.indexOf('[');
+        const tsStart = line.indexOf('[']);
         const tsEnd = line.indexOf(']');
         const timestamp = tsStart >= 0 && tsEnd > tsStart ? line.slice(tsStart + 1, tsEnd) : null;
 
