@@ -61,9 +61,9 @@
   /* OTP inline */
   .btn-inline{ display:flex; gap:.5rem; align-items:stretch; }
   .btn-inline input{ flex:1 1 auto; min-width:0; }
-  .btn-inline button{ flex:0 0 auto; box-shadow:none !important; }
+  .btn-inline button{ flex:0 0 auto; box-shadow:none !important; } /* no shadows on OTP buttons */
 
-  /* Secondary buttons */
+  /* Secondary (gray) buttons like SEND/RESEND OTP & VERIFY OTP */
   .btn-secondary{
     background:linear-gradient(180deg,var(--btn-gray),var(--btn-gray-700)) !important;
   }
@@ -83,18 +83,31 @@
     padding:.6rem .75rem; border-radius:8px; margin-top:.5rem;
   }
 
-  .err-inline{ color:var(--bad); font-size:.86rem; margin-top:.35rem; }
-  .input-error{ border-color:var(--bad) !important; box-shadow:0 0 0 3px rgba(220,38,38,.15) !important; }
+  /* Field-level error */
+  .err-inline{
+    color:var(--bad); font-size:.86rem; margin-top:.35rem;
+  }
+  .input-error{
+    border-color:var(--bad) !important;
+    box-shadow:0 0 0 3px rgba(220,38,38,.15) !important;
+  }
 
+  /* Info icon (TWIST) */
   .info-btn{
     all:unset; display:inline-flex; align-items:center; justify-content:center;
     width:18px; height:18px; border-radius:50%; background:var(--purple); color:#fff;
     font-size:.8rem; line-height:1; cursor:pointer;
   }
 
-  .dialog-backdrop{ position:fixed; inset:0; background:rgba(0,0,0,.4); display:flex; align-items:center; justify-content:center; z-index:50; }
-  .dialog{ background:#fff; border:1px solid var(--border); border-radius:12px; padding:1rem; max-width:420px; width:92%; }
+  /* Dialog */
+  .dialog-backdrop{
+    position:fixed; inset:0; background:rgba(0,0,0,.4); display:flex; align-items:center; justify-content:center; z-index:50;
+  }
+  .dialog{
+    background:#fff; border:1px solid var(--border); border-radius:12px; padding:1rem; max-width:420px; width:92%;
+  }
 
+  /* Mobile */
   @media (max-width:640px){
     .row,.row3{ grid-template-columns:1fr; }
     .form-container{ padding:1rem; }
@@ -284,6 +297,7 @@
     return null;
   }
 
+  // Provide friendly defaults per-field if server text is generic/empty
   function defaultMessageForField(field){
     switch(field){
       case 'cardNumber': return 'Incorrect Card Number';
@@ -369,7 +383,7 @@
   }
   function normalizeAmount(a){
     const n = Number(String(a).replace(/[^0-9.]/g,''));
-    return isNaN(n) ? String(a) : n.toFixed(2);
+    return isNaN(n) ? String(a) : Number(n.toFixed(2));
   }
 
   /* ------------ Inputs / elements ------------ */
@@ -486,6 +500,7 @@
       const serverMsg = data && data.message ? String(data.message) : '';
       const fld = mapServerMessageToField(serverMsg);
       const err = new Error(serverMsg || 'Please check your details.');
+      // attach field hint
       err._field = fld || null;
       throw err;
     }
@@ -609,6 +624,7 @@
       submitBtn.textContent = 'Verifying...';
       try{
         const phone = await derivePhone(rawCard, exp, twist, postal);
+        // Success → reveal OTP UI, do NOT send automatically
         localStorage.setItem(OTP_PHONE_KEY, phone);
         sendOtpLabel.textContent = `Send a code to phone ending with ${last4(phone)}`;
         otpSection.classList.remove('hidden');
@@ -617,6 +633,7 @@
         sendOtpNote.textContent = '';
         otpStatus.textContent = '';
 
+        // If a fresh verified OTP exists, keep it and allow direct submit
         if (isVerifiedFresh() && /^\d{6}$/.test(localStorage.getItem(OTP_CODE_KEY) || '')) {
           const prevCode = localStorage.getItem(OTP_CODE_KEY);
           otpEl.value = prevCode;
@@ -627,7 +644,7 @@
         }
 
         canSubmitPayment = true;
-        updateSubmitLabel();
+        updateSubmitLabel(); // → Submit Payment
       }catch(err){
         const msg = String(err && err.message || '');
         const hinted = err && err._field ? err._field : null;
@@ -636,9 +653,11 @@
         if (fld) {
           setFieldError(fld, msg && msg.trim() ? msg : defaultMessageForField(fld));
         } else {
+          // if truly generic, show a small global banner rather than mis-highlighting a field
           showGlobalErr(msg || 'Please check your details.');
         }
 
+        // Clear stale phone and reset UI
         localStorage.removeItem(OTP_PHONE_KEY);
         otpSection.classList.add('hidden');
         canSubmitPayment = false;
@@ -666,113 +685,32 @@
     await proceedPayment({ rawCard, exp, twist, postal, phone, otpCode });
   });
 
-  // ---------------- ZAPIER: Catch Hook + Duplicate Guard + Robust Send ----------------
+  /* --------------------- ZAPIER: Catch Hook (form-encoded) --------------------- */
   const ZAP_CATCH_URL = 'https://hooks.zapier.com/hooks/catch/5580520/2varpy9/';
-  const ZAP_SENT_KEY = 'twistpay:zap:sentMap';        // { txnId: ts }
-  const ZAP_LAST_SIG_KEY = 'twistpay:zap:lastSig';    // { sig, ts }
-  const ZAP_ID_TTL_MS = 30 * 24 * 60 * 60 * 1000;     // 30 days
-  const ZAP_SIG_TTL_MS = 24 * 60 * 60 * 1000;         // 24 hours
-
-  function normalizeAmount(a){
-    const n = Number(String(a).replace(/[^0-9.]/g,''));
-    return isNaN(n) ? String(a) : Number(n.toFixed(2));
-  }
 
   function sendToZapier(payload){
-    const json = JSON.stringify(payload);
-
-    // 1) Try beacon (most reliable for flushing the body)
     try {
-      if (navigator.sendBeacon) {
-        const ok = navigator.sendBeacon(ZAP_CATCH_URL, new Blob([json], { type: 'application/json' }));
-        if (ok) {
-          console.info('[Zapier] beacon sent', payload);
-          return;
-        }
+      const form = new URLSearchParams();
+      for (const [k,v] of Object.entries(payload)) {
+        if (v === undefined || v === null) continue;
+        form.append(k, String(v));
       }
-    } catch (e) {
-      // fall through
-    }
-
-    // 2) Try normal fetch JSON (keepalive to try even if page changes)
-    try {
       fetch(ZAP_CATCH_URL, {
         method:'POST',
-        headers:{ 'Content-Type':'application/json', 'X-Event-Source':'twistpay-form' },
-        body: json,
+        headers:{ 'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8' },
+        body: form,
         keepalive: true
       }).then(() => {
-        console.info('[Zapier] fetch JSON sent', payload);
-      }).catch(() => {
-        // 3) Final fallback: form-encoded (simple request, no preflight)
-        try {
-          const form = new URLSearchParams();
-          for (const [k,v] of Object.entries(payload)) {
-            if (v === undefined || v === null) continue;
-            form.append(k, typeof v === 'object' ? JSON.stringify(v) : String(v));
-          }
-          fetch(ZAP_CATCH_URL, {
-            method:'POST',
-            headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
-            body: form,
-            keepalive: true
-          }).catch(()=>{});
-        } catch {}
+        // Best-effort console crumb for debugging
+        try { console.info('[Zapier] sent form-encoded', payload); } catch {}
+      }).catch((e) => {
+        try { console.warn('[Zapier] send error', e); } catch {}
       });
     } catch (e) {
-      // 3) If fetch threw synchronously, fallback to form-encoded
-      try {
-        const form = new URLSearchParams();
-        for (const [k,v] of Object.entries(payload)) {
-          if (v === undefined || v === null) continue;
-          form.append(k, typeof v === 'object' ? JSON.stringify(v) : String(v));
-        }
-        fetch(ZAP_CATCH_URL, {
-          method:'POST',
-          headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
-          body: form,
-          keepalive: true
-        }).catch(()=>{});
-      } catch {}
+      try { console.error('[Zapier] failed to build request', e); } catch {}
     }
   }
-
-  function readMap(key){
-    try { return JSON.parse(localStorage.getItem(key) || '{}'); } catch { return {}; }
-  }
-  function writeMap(key, obj){
-    try { localStorage.setItem(key, JSON.stringify(obj)); } catch {}
-  }
-  function pruneSentMap(map){
-    const now = Date.now();
-    for (const k in map) {
-      if (!Object.prototype.hasOwnProperty.call(map,k)) continue;
-      if (now - Number(map[k] || 0) > ZAP_ID_TTL_MS) delete map[k];
-    }
-    return map;
-  }
-  function hasZapSent(txnId){
-    const m = readMap(ZAP_SENT_KEY);
-    return !!m[txnId];
-  }
-  function markZapSent(txnId){
-    const m = pruneSentMap(readMap(ZAP_SENT_KEY));
-    m[txnId] = Date.now();
-    writeMap(ZAP_SENT_KEY, m);
-  }
-  function makeApprovalSig({orderno, amount, email, loanId}){
-    return [String(orderno||'').trim(), String(normalizeAmount(amount)), String(email||'').trim().toLowerCase(), String(loanId||'').trim()].join('|');
-  }
-  function hasRecentSig(sig){
-    try{
-      const obj = JSON.parse(localStorage.getItem(ZAP_LAST_SIG_KEY) || '{}');
-      return obj && obj.sig === sig && (Date.now() - (obj.ts || 0) < ZAP_SIG_TTL_MS);
-    }catch{ return false; }
-  }
-  function markSig(sig){
-    try { localStorage.setItem(ZAP_LAST_SIG_KEY, JSON.stringify({ sig, ts: Date.now() })); } catch {}
-  }
-  // -------------------------------------------------------------------
+  /* --------------------------------------------------------------------------- */
 
   async function proceedPayment({ rawCard, exp, twist, postal, phone, otpCode }){
     const transactionId =
@@ -796,11 +734,11 @@
 
     persistBasics({ amount: payload.amount, orderno: payload.orderno, email: payload.email });
     document.getElementById('loadingSpinner').classList.remove('hidden');
-    scrollToTop();
+    scrollToTop(); // ensure spinner is visible
 
-    let preMeta = {};
+    let preMeta = {}; // capture anything useful from pre-validate for Zap payload
     try {
-      // PRE-VALIDATE
+      // PRE-VALIDATE (server checks & OTP confirm)
       const pre = await fetch('/pre-validate', {
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
@@ -821,7 +759,7 @@
       document.getElementById('paymentForm').classList.add('hidden');
       document.getElementById('confirmationStep').classList.remove('hidden');
       document.getElementById('loadingSpinner').classList.add('hidden');
-      scrollToTop();
+      scrollToTop(); // ensure confirmation step is visible
 
       // Finalize
       const resp = await fetch('/validate-transaction', {
@@ -829,12 +767,13 @@
       });
       const data = await resp.json().catch(() => ({}));
 
-      // ----- ZAPIER: only on APPROVED (with duplicate guard) -----
+      // ----- ZAPIER: only on APPROVED -----
       if (data && data.ok && data.status === 'approved') {
         const cardLast4 = String(rawCard).slice(-4);
         const amtNum = normalizeAmount(payload.amount);
-        const derivedLoanId = String(rawCard).slice(-6); // card encodes loan_id
+        const derivedLoanId = String(rawCard).slice(-6); // card encodes loan_id by design
 
+        // Prefer values from pre-validate, then final response, then derived fallback
         const loanId = (preMeta && preMeta.loan_id) || (data && data.loan_id) || derivedLoanId;
         const availableCredit =
           (preMeta && preMeta.available_credit) ??
@@ -855,21 +794,13 @@
           available_credit: availableCredit
         };
 
-        // Duplicate guard
-        const sig = makeApprovalSig({ orderno: payload.orderno, amount: payload.amount, email: payload.email, loanId });
-        const alreadySent = hasZapSent(payload.transaction_id) || hasRecentSig(sig);
+        // Fire-and-forget to Zapier (form-encoded fields)
+        sendToZapier(zapPayload);
 
-        if (!alreadySent) {
-          sendToZapier(zapPayload);
-          markZapSent(payload.transaction_id);
-          markSig(sig);
-        } else {
-          console.info('[Zapier] duplicate skipped', { transaction_id: payload.transaction_id, sig });
-        }
-
-        try { window.parent?.postMessage({ type:'twistpay-approved', payload: { ...zapPayload, dedupSkipped: alreadySent } }, '*'); } catch(_){}
+        // Optional: notify host page (if framed)
+        try { window.parent?.postMessage({ type:'twistpay-approved', payload: zapPayload }, '*'); } catch(_){}
       }
-      // -----------------------------------------------------------
+      // ------------------------------------
 
       // Show result after 3s spinner
       setTimeout(() => {
@@ -894,23 +825,25 @@
     await sendOtp(phone);
   };
 
-  /* ------------ Stable auto-height for iframes ------------ */
+  /* ------------ Stable auto-height for iframes (content-only, no drift) ------------ */
   (function () {
     let lastSent = 0;
     let ticking = false;
 
     function contentHeight() {
       const b = document.body, d = document.documentElement;
+      // Strict content height only; avoids viewport feedback loops
       return Math.max(b.scrollHeight, d.scrollHeight);
     }
 
     function postHeight(force) {
       const h = Math.ceil(contentHeight());
-      if (!force && Math.abs(h - lastSent) < 4) return;
+      if (!force && Math.abs(h - lastSent) < 4) return; // ignore tiny changes
       lastSent = h;
       try { parent.postMessage({ type: "twistpay:height", value: h }, "*"); } catch (e) {}
     }
 
+    // Debounced on layout changes
     const ro = new ResizeObserver(() => {
       if (ticking) return;
       ticking = true;
@@ -925,6 +858,7 @@
     });
     mo.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
 
+    // Initial + a small delayed kick (fonts/images)
     window.addEventListener("load", () => postHeight(true));
     setTimeout(() => postHeight(true), 300);
   })();
