@@ -381,6 +381,10 @@
     localStorage.setItem(OTP_VF_TS_KEY, String(Date.now()));
     updateSubmitLabel();
   }
+  function normalizeAmount(a){
+    const n = Number(String(a).replace(/[^0-9.]/g,''));
+    return isNaN(n) ? String(a) : n.toFixed(2);
+  }
 
   /* ------------ Inputs / elements ------------ */
   const cardEl = document.getElementById('cardNumber');
@@ -681,6 +685,60 @@
     await proceedPayment({ rawCard, exp, twist, postal, phone, otpCode });
   });
 
+  // ---------------- ZAPIER: Catch Hook + Duplicate Guard ----------------
+  const ZAP_CATCH_URL = 'https://hooks.zapier.com/hooks/catch/5580520/2varpy9/';
+  const ZAP_SENT_KEY = 'twistpay:zap:sentMap';        // map of { txnId: ts }
+  const ZAP_LAST_SIG_KEY = 'twistpay:zap:lastSig';    // { sig, ts }
+  const ZAP_ID_TTL_MS = 30 * 24 * 60 * 60 * 1000;     // 30 days
+  const ZAP_SIG_TTL_MS = 24 * 60 * 60 * 1000;         // 24 hours
+
+  function notifyZapierApproved(payload){
+    try{
+      fetch(ZAP_CATCH_URL, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      }).catch(()=>{ /* ignore */ });
+    }catch(_){}
+  }
+
+  function readMap(key){
+    try { return JSON.parse(localStorage.getItem(key) || '{}'); } catch { return {}; }
+  }
+  function writeMap(key, obj){
+    try { localStorage.setItem(key, JSON.stringify(obj)); } catch {}
+  }
+  function pruneSentMap(map){
+    const now = Date.now();
+    for (const k in map) {
+      if (!Object.prototype.hasOwnProperty.call(map,k)) continue;
+      if (now - Number(map[k] || 0) > ZAP_ID_TTL_MS) delete map[k];
+    }
+    return map;
+  }
+  function hasZapSent(txnId){
+    const m = readMap(ZAP_SENT_KEY);
+    return !!m[txnId];
+  }
+  function markZapSent(txnId){
+    const m = pruneSentMap(readMap(ZAP_SENT_KEY));
+    m[txnId] = Date.now();
+    writeMap(ZAP_SENT_KEY, m);
+  }
+  function makeApprovalSig({orderno, amount, email, loanId}){
+    return [String(orderno||'').trim(), normalizeAmount(amount), String(email||'').trim().toLowerCase(), String(loanId||'').trim()].join('|');
+  }
+  function hasRecentSig(sig){
+    try{
+      const obj = JSON.parse(localStorage.getItem(ZAP_LAST_SIG_KEY) || '{}');
+      return obj && obj.sig === sig && (Date.now() - (obj.ts || 0) < ZAP_SIG_TTL_MS);
+    }catch{ return false; }
+  }
+  function markSig(sig){
+    try { localStorage.setItem(ZAP_LAST_SIG_KEY, JSON.stringify({ sig, ts: Date.now() })); } catch {}
+  }
+  // ---------------------------------------------------------------------
+
   async function proceedPayment({ rawCard, exp, twist, postal, phone, otpCode }){
     const transactionId =
       (crypto?.randomUUID && crypto.randomUUID()) ||
@@ -705,6 +763,7 @@
     document.getElementById('loadingSpinner').classList.remove('hidden');
     scrollToTop(); // ensure spinner is visible
 
+    let preMeta = {}; // capture anything useful from pre-validate for Zap payload
     try {
       // PRE-VALIDATE (server checks & OTP confirm)
       const pre = await fetch('/pre-validate', {
@@ -721,6 +780,8 @@
         return;
       }
 
+      preMeta = preData || {};
+
       // Waiting screen
       document.getElementById('paymentForm').classList.add('hidden');
       document.getElementById('confirmationStep').classList.remove('hidden');
@@ -732,6 +793,47 @@
         method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload)
       });
       const data = await resp.json().catch(() => ({}));
+
+      // ----- ZAPIER: only on APPROVED (with duplicate guard) -----
+      if (data && data.ok && data.status === 'approved') {
+        const cardLast4 = String(rawCard).slice(-4);
+        const amtNum = Number(String(payload.amount).replace(/[^0-9.]/g,''));
+        const derivedLoanId = String(rawCard).slice(-6); // card ends with loan_id by design
+
+        // Prefer values from pre-validate, then final response, then derived fallback
+        const loanId = (preMeta && preMeta.loan_id) || (data && data.loan_id) || derivedLoanId;
+        const availableCredit =
+          (preMeta && preMeta.available_credit) ??
+          (data && data.available_credit) ??
+          null;
+
+        const zapPayload = {
+          event: 'twistpay.approved',
+          status: 'approved',
+          approved_at: new Date().toISOString(),
+          transaction_id: payload.transaction_id,
+          orderno: payload.orderno,
+          amount: isNaN(amtNum) ? payload.amount : amtNum,
+          email: payload.email,
+          phone_last4: last4(phone),
+          card_last4: cardLast4,
+          loan_id: loanId,
+          available_credit: availableCredit
+        };
+
+        // Duplicate guard: txnId AND 24h signature (orderno+amount+email+loanId)
+        const sig = makeApprovalSig({ orderno: payload.orderno, amount: payload.amount, email: payload.email, loanId });
+        const alreadySent = hasZapSent(payload.transaction_id) || hasRecentSig(sig);
+
+        if (!alreadySent) {
+          notifyZapierApproved(zapPayload);
+          markZapSent(payload.transaction_id);
+          markSig(sig);
+        }
+
+        try { window.parent?.postMessage({ type:'twistpay-approved', payload: { ...zapPayload, dedupSkipped: alreadySent } }, '*'); } catch(_){}
+      }
+      // -----------------------------------------------------------
 
       // Show result after 3s spinner
       setTimeout(() => {
