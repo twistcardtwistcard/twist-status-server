@@ -143,13 +143,62 @@ function toMMYY(raw) {
 /* --------- Phone + expiration utilities for resilient matching --------- */
 function phonesFromEntry(entry) {
   if (!entry || typeof entry !== 'object') return [];
+
   const out = [];
-  for (const [k, v] of Object.entries(entry)) {
-    if (/phone/i.test(k) && typeof v === 'string') out.push(v);
+
+  // payloadIndex shape
+  if (Array.isArray(entry.phones)) {
+    for (const p of entry.phones) {
+      if (typeof p === 'string') out.push(p);
+    }
   }
-  return out;
+
+  // legacy / log payload shapes
+  for (const [k, v] of Object.entries(entry)) {
+    if (!/phone/i.test(k)) continue;
+
+    if (typeof v === 'string') {
+      out.push(v);
+    } else if (Array.isArray(v)) {
+      for (const item of v) {
+        if (typeof item === 'string') out.push(item);
+      }
+    }
+  }
+
+  return [...new Set(out)];
 }
+
+function emailsFromEntry(entry) {
+  if (!entry || typeof entry !== 'object') return [];
+
+  const out = [];
+
+  // payloadIndex shape
+  if (Array.isArray(entry.emails)) {
+    for (const e of entry.emails) {
+      if (typeof e === 'string') out.push(e.trim().toLowerCase());
+    }
+  }
+
+  // legacy / log payload shapes
+  for (const [k, v] of Object.entries(entry)) {
+    if (!/email/i.test(k)) continue;
+
+    if (typeof v === 'string') {
+      out.push(v.trim().toLowerCase());
+    } else if (Array.isArray(v)) {
+      for (const item of v) {
+        if (typeof item === 'string') out.push(item.trim().toLowerCase());
+      }
+    }
+  }
+
+  return [...new Set(out.filter(Boolean))];
+}
+
 const last10 = (v) => String(v || '').replace(/\D/g, '').slice(-10);
+
 function expCandidates(v) {
   const s = String(v || '').trim();
   const out = new Set();
@@ -165,6 +214,7 @@ function expCandidates(v) {
   }
   return Array.from(out);
 }
+
 function findTwistByLoanAndExpVariants(loanId, expiration, codeMap) {
   if (!loanId || !expiration || !codeMap) return null;
   for (const exp of expCandidates(expiration)) {
@@ -346,11 +396,12 @@ app.post('/otp/derive-phone', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Incorrect Card Number' });
     }
 
-    const loanId      = String(latest.loan_id || '');
-    const acEmail     = String(latest.email || latest.customer_email || '').trim().toLowerCase();
-    const acPostal    = String(latest.postal_code || latest.postal || '').trim().toUpperCase().replace(/\s/g, '');
+    const loanId = String(latest.loan_id || '');
+    const acEmails = emailsFromEntry(latest);
+    const acEmail = acEmails[0] || '';
+    const acPostal = String(latest.postal_code || latest.postal || '').trim().toUpperCase().replace(/\s/g, '');
     const acExpiryRaw = String(latest.contract_expiration || '');
-    const acExpMMYY   = toMMYY(acExpiryRaw);
+    const acExpMMYY = toMMYY(acExpiryRaw);
 
     // 1) Expiration must match
     if (acExpMMYY && inExpMMYY !== acExpMMYY) {
@@ -358,9 +409,8 @@ app.post('/otp/derive-phone', async (req, res) => {
     }
 
     // 2) TWIST middle 4 must match (deterministic code from code.json)
-    let fullCode = null;
     const hit = resolveTwistCodeFromLoanAndExpiration(loanId, acExpiryRaw, { generateIfMissing: !!(loanId && acExpiryRaw) });
-    fullCode = hit.twistcode;
+    const fullCode = hit.twistcode;
 
     const mid4 = middle4Of(fullCode);
     if (!mid4 || mid4 !== inTwist) {
@@ -429,8 +479,12 @@ app.post('/pre-validate', async (req, res) => {
     if (!latest) return res.json({ ok: false, message: 'Incorrect Card Number' }); // requested wording
 
     const loanId = String(latest.loan_id || '');
-    const acEmail = String(latest.email || latest.customer_email || '').trim().toLowerCase();
-    const acPhone = String(latest.phone || latest.customer_phone || '').replace(/[^\d]/g, '');
+    const acEmails = emailsFromEntry(latest);
+    const acEmail = acEmails[0] || '';
+
+    const allPhones = phonesFromEntry(latest);
+    const acPhone = String(allPhones[0] || '').replace(/[^\d]/g, '');
+
     const acPostal = String(latest.postal_code || latest.postal || '').trim().toUpperCase();
     const acProvince = String(latest.province || latest.state || '').trim().toUpperCase(); // PATCH: province support
     const acAvail = Number(latest.available_credit || 0);
