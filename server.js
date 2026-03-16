@@ -174,25 +174,102 @@ function findTwistByLoanAndExpVariants(loanId, expiration, codeMap) {
   return null;
 }
 
+function readCodeMap() {
+  if (!fs.existsSync(twistCodePath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
+  } catch (e) {
+    console.error('Failed to read code.json:', e);
+    return null;
+  }
+}
+
+function resolveTwistCodeFromLoanAndExpiration(loanId, expiration, { generateIfMissing = false } = {}) {
+  if (!loanId || !expiration) return { twistcode: null, usedExpiration: null };
+
+  const data = readCodeMap();
+  if (data) {
+    const hit = findTwistByLoanAndExpVariants(loanId, expiration, data);
+    if (hit) return hit;
+  }
+
+  if (generateIfMissing) {
+    const twistcode = getOrGenerateTwistCode(loanId, expiration);
+    return { twistcode, usedExpiration: expiration };
+  }
+
+  return { twistcode: null, usedExpiration: null };
+}
+
+function getTimestampFromLogLine(line) {
+  if (!line) return null;
+  const tsStart = line.indexOf('[');
+  const tsEnd = line.indexOf(']');
+  return tsStart >= 0 && tsEnd > tsStart ? line.slice(tsStart + 1, tsEnd) : null;
+}
+
+function getIndexRecordUpdatedAt(rec) {
+  const raw = rec && rec.updatedAt ? Date.parse(rec.updatedAt) : NaN;
+  return isNaN(raw) ? 0 : raw;
+}
+
+function getIndexRecordsByPhoneLast10(l10) {
+  try {
+    const idx = payloadIndex.loadPayloadIndex();
+    const keys = idx.byPhone[l10] || [];
+    return keys
+      .map(k => idx.byKey[k])
+      .filter(Boolean)
+      .sort((a, b) => getIndexRecordUpdatedAt(b) - getIndexRecordUpdatedAt(a));
+  } catch (e) {
+    console.error('getIndexRecordsByPhoneLast10 error:', e);
+    return [];
+  }
+}
+
+function getIndexLatestByLoanLast6(last6) {
+  try {
+    const idx = payloadIndex.loadPayloadIndex();
+    const recs = Object.values(idx.byKey || {})
+      .filter(Boolean)
+      .filter(rec => String(rec.loan_id || '').endsWith(last6))
+      .sort((a, b) => getIndexRecordUpdatedAt(b) - getIndexRecordUpdatedAt(a));
+
+    return recs[0] || null;
+  } catch (e) {
+    console.error('getIndexLatestByLoanLast6 error:', e);
+    return null;
+  }
+}
+
 /**
  * Scan newest→oldest across MERGED logs.
  * Accept ANY line that contains a JSON object (old logs might not have "/store-status:" marker).
+ * Falls back to payloadIndex if not found in logs.
  */
 async function readLatestPayloadByLoanIdEndsWith(last6) {
   try {
     const raw = readMergedLogText();
-    if (!raw) return null;
-    const lines = raw.split('\n').filter(Boolean);
-    for (const line of lines) {
-      const jsonMatch = line.match(/{.*}/);
-      if (!jsonMatch) continue;
-      try {
-        const obj = JSON.parse(jsonMatch[0]);
-        const loanId = String(obj.loan_id || '');
-        if (loanId.endsWith(last6)) return obj;
-      } catch {}
+    if (raw) {
+      const lines = raw.split('\n').filter(Boolean);
+      for (const line of lines) {
+        const jsonMatch = line.match(/{.*}/);
+        if (!jsonMatch) continue;
+        try {
+          const obj = JSON.parse(jsonMatch[0]);
+          const loanId = String(obj.loan_id || '');
+          if (loanId.endsWith(last6)) return obj;
+        } catch {}
+      }
     }
-  } catch {}
+  } catch (e) {
+    console.error('readLatestPayloadByLoanIdEndsWith log scan error:', e);
+  }
+
+  // Fallback to durable payload index
+  const idxHit = getIndexLatestByLoanLast6(last6);
+  if (idxHit) return idxHit;
+
   return null;
 }
 
@@ -282,17 +359,9 @@ app.post('/otp/derive-phone', async (req, res) => {
 
     // 2) TWIST middle 4 must match (deterministic code from code.json)
     let fullCode = null;
-    try {
-      if (fs.existsSync(twistCodePath)) {
-        const data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
-        const hit = findTwistByLoanAndExpVariants(loanId, acExpiryRaw, data);
-        if (hit) fullCode = hit.twistcode;
-      }
-    } catch {}
-    if (!fullCode && loanId && acExpiryRaw) {
-      // ensure a deterministic code exists for this pair
-      fullCode = getOrGenerateTwistCode(loanId, acExpiryRaw);
-    }
+    const hit = resolveTwistCodeFromLoanAndExpiration(loanId, acExpiryRaw, { generateIfMissing: !!(loanId && acExpiryRaw) });
+    fullCode = hit.twistcode;
+
     const mid4 = middle4Of(fullCode);
     if (!mid4 || mid4 !== inTwist) {
       return res.status(400).json({ success: false, message: 'TWIST code incorrect.' });
@@ -406,15 +475,8 @@ app.post('/pre-validate', async (req, res) => {
     }
 
     // TWIST middle 4 (code.json uses hash(loan_id|contract_expiration) — support format variants)
-    let fullCode = null;
-    if (fs.existsSync(twistCodePath)) {
-      try {
-        const data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
-        const hit = findTwistByLoanAndExpVariants(loanId, acExpiryRaw, data);
-        if (hit) fullCode = hit.twistcode;
-      } catch {}
-    }
-    const mid4 = middle4Of(fullCode);
+    const codeHit = resolveTwistCodeFromLoanAndExpiration(loanId, acExpiryRaw);
+    const mid4 = middle4Of(codeHit.twistcode);
     if (!mid4 || String(twist) !== mid4) {
       return res.json({ ok: false, message: 'TWIST code incorrect.' });
     }
@@ -621,7 +683,7 @@ app.get('/check-status', (req, res) => {
  * Returns entire twist code if found.
  * Accepts any JSON line (with or without "/store-status:") and any phone-like field.
  * Normalizes expiration to hit code.json.
- * Searches across BOTH logs.
+ * Searches logs first, then payloadIndex fallback.
  */
 app.get('/check-latest', (req, res) => {
   const { phone } = req.query;
@@ -632,61 +694,71 @@ app.get('/check-latest', (req, res) => {
     return res.status(400).json({ success: false, message: 'Invalid phone format' });
   }
 
+  // 1) Logs first (preserve existing behavior)
   const raw = readMergedLogText();
-  if (!raw) return res.status(404).json({ success: false, message: 'No log file found' });
+  if (raw) {
+    try {
+      const lines = raw.split('\n').filter(Boolean);
 
-  try {
-    const lines = raw.split('\n').filter(Boolean);
+      for (const line of lines) {
+        const jsonMatch = line.match(/{.*}/);
+        if (!jsonMatch) continue;
 
-    for (const line of lines) {
-      const jsonMatch = line.match(/{.*}/);
-      if (!jsonMatch) continue;
+        let entry;
+        try { entry = JSON.parse(jsonMatch[0]); } catch { continue; }
 
-      let entry;
-      try { entry = JSON.parse(jsonMatch[0]); } catch { continue; }
+        const ePhones = phonesFromEntry(entry);
+        const hasMatch = ePhones.some(p => last10(p) === qLast10);
+        if (!hasMatch) continue;
 
-      const ePhones = phonesFromEntry(entry);
-      const hasMatch = ePhones.some(p => last10(p) === qLast10);
-      if (!hasMatch) continue;
+        const loanId = entry.loan_id;
+        const expiration = entry.contract_expiration;
+        const hit = resolveTwistCodeFromLoanAndExpiration(loanId, expiration);
 
-      const loanId = entry.loan_id;
-      const expiration = entry.contract_expiration;
-      let twistcode = null;
-
-      if (loanId && expiration && fs.existsSync(twistCodePath)) {
-        try {
-          const data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
-          const hit = findTwistByLoanAndExpVariants(loanId, expiration, data);
-          twistcode = hit ? hit.twistcode : null;
-        } catch (e) {
-          console.error('check-latest code.json read error:', e);
-        }
+        return res.json({
+          success: true,
+          source: 'logs',
+          transaction_id: entry.transaction_id || null,
+          timestamp: getTimestampFromLogLine(line),
+          code: hit.twistcode || null
+        });
       }
+    } catch (err) {
+      console.error('check-latest log scan error:', err);
+    }
+  }
 
-      // Timestamp from the log line header: [YYYY-MM-DDTHH:mm:ss.sssZ]
-      const tsStart = line.indexOf('[');
-      const tsEnd = line.indexOf(']');
-      const timestamp = tsStart >= 0 && tsEnd > tsStart ? line.slice(tsStart + 1, tsEnd) : null;
+  // 2) payloadIndex fallback
+  try {
+    const records = getIndexRecordsByPhoneLast10(qLast10);
+    const latest = records[0];
 
-      return res.json({
-        success: true,
-        transaction_id: entry.transaction_id || null,
-        timestamp,
-        code: twistcode
-      });
+    if (!latest) {
+      return res.status(404).json({ success: false, message: 'No entries found for this phone number' });
     }
 
-    return res.status(404).json({ success: false, message: 'No entries found for this phone number' });
+    let twistcode = latest.code || null;
+    if (!twistcode && latest.loan_id && latest.contract_expiration) {
+      const hit = resolveTwistCodeFromLoanAndExpiration(latest.loan_id, latest.contract_expiration);
+      twistcode = hit.twistcode || null;
+    }
+
+    return res.json({
+      success: true,
+      source: 'payloadIndex',
+      transaction_id: latest.transaction_id || null,
+      timestamp: latest.updatedAt || null,
+      code: twistcode
+    });
   } catch (err) {
-    console.error('check-latest error:', err);
+    console.error('check-latest payloadIndex fallback error:', err);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
 /**
- * Return middle 4 digits mapped from phone -> latest loan entry by scanning logs (newest → oldest).
- * Accepts any JSON line and any phone-like field; normalizes expiration for code.json lookup.
- * Searches across BOTH logs.
+ * Return middle 4 digits mapped from phone -> latest loan entry.
+ * Searches logs first, then payloadIndex fallback.
  */
 app.get('/code/middle4-by-phone', (req, res) => {
   try {
@@ -698,56 +770,78 @@ app.get('/code/middle4-by-phone', (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid phone format' });
     }
 
+    // 1) Logs first (preserve existing behavior)
     const raw = readMergedLogText();
-    if (!raw) return res.status(404).json({ success: false, message: 'No log file found' });
+    if (raw) {
+      const lines = raw.split('\n').filter(Boolean);
 
-    const lines = raw.split('\n').filter(Boolean);
+      for (const line of lines) {
+        const jsonMatch = line.match(/{.*}/);
+        if (!jsonMatch) continue;
 
-    for (const line of lines) {
-      const jsonMatch = line.match(/{.*}/);
-      if (!jsonMatch) continue;
+        let entry;
+        try { entry = JSON.parse(jsonMatch[0]); } catch { continue; }
 
-      let entry;
-      try { entry = JSON.parse(jsonMatch[0]); } catch { continue; }
+        const ePhones = phonesFromEntry(entry);
+        const matched = ePhones.some(p => last10(p) === qLast10);
+        if (!matched) continue;
 
-      const ePhones = phonesFromEntry(entry);
-      const matched = ePhones.some(p => last10(p) === qLast10);
-      if (!matched) continue;
+        const loanId = entry.loan_id || null;
+        const expiration = entry.contract_expiration || null;
+        if (!loanId || !expiration) continue;
 
-      const loanId = entry.loan_id || null;
-      const expiration = entry.contract_expiration || null;
-      if (!loanId || !expiration) continue;
-
-      if (!fs.existsSync(twistCodePath)) {
-        return res.status(404).json({ success: false, message: 'code.json not found' });
-      }
-
-      try {
-        const data = JSON.parse(fs.readFileSync(twistCodePath, 'utf-8'));
-        const hit = findTwistByLoanAndExpVariants(loanId, expiration, data);
-        if (!hit) {
+        const hit = resolveTwistCodeFromLoanAndExpiration(loanId, expiration);
+        if (!hit.twistcode) {
           return res.status(404).json({ success: false, message: 'No twistcode for this loan/expiration' });
         }
-        const middle4 = String(hit.twistcode).slice(4, 8);
 
-        const tsStart = line.indexOf('[');
-        const tsEnd = line.indexOf(']');
-        const timestamp = tsStart >= 0 && tsEnd > tsStart ? line.slice(tsStart + 1, tsEnd) : null;
+        const middle4 = String(hit.twistcode).slice(4, 8);
 
         return res.json({
           success: true,
+          source: 'logs',
           middle4,
           loan_id: loanId,
-          contract_expiration: hit.usedExpiration,
-          timestamp
+          contract_expiration: hit.usedExpiration || expiration,
+          timestamp: getTimestampFromLogLine(line)
         });
-      } catch (e) {
-        console.error('middle4-by-phone error:', e);
-        return res.status(500).json({ success: false, message: 'Server error' });
       }
     }
 
-    return res.status(404).json({ success: false, message: 'No entries found for this phone number' });
+    // 2) payloadIndex fallback
+    const records = getIndexRecordsByPhoneLast10(qLast10);
+    const latest = records[0];
+    if (!latest) {
+      return res.status(404).json({ success: false, message: 'No entries found for this phone number' });
+    }
+
+    const loanId = latest.loan_id || null;
+    const expiration = latest.contract_expiration || null;
+    if (!loanId || !expiration) {
+      return res.status(404).json({ success: false, message: 'No loan/expiration found for this phone number' });
+    }
+
+    let twistcode = latest.code || null;
+    let usedExpiration = expiration;
+
+    if (!twistcode) {
+      const hit = resolveTwistCodeFromLoanAndExpiration(loanId, expiration);
+      twistcode = hit.twistcode || null;
+      usedExpiration = hit.usedExpiration || expiration;
+    }
+
+    if (!twistcode) {
+      return res.status(404).json({ success: false, message: 'No twistcode for this loan/expiration' });
+    }
+
+    return res.json({
+      success: true,
+      source: 'payloadIndex',
+      middle4: String(twistcode).slice(4, 8),
+      loan_id: loanId,
+      contract_expiration: usedExpiration,
+      timestamp: latest.updatedAt || null
+    });
   } catch (e) {
     console.error('code/middle4-by-phone error:', e);
     return res.status(500).json({ success: false, message: 'Server error' });
@@ -799,31 +893,47 @@ app.get('/admin/log-info', (_req, res) => {
   res.json({ candidates: info });
 });
 
-// Admin: show the latest log line that matches a phone (by last 10 digits)
+// Admin: show the latest match by phone (logs first, then payloadIndex)
 app.get('/admin/find-latest-by-phone', (_req, res) => {
   try {
     const phone = String(_req.query.phone || '');
     const target = phone.replace(/\D/g, '').slice(-10);
     if (target.length !== 10) return res.status(400).json({ success: false, message: 'Invalid phone' });
 
+    // 1) Logs first
     const raw = readMergedLogText();
-    if (!raw) return res.status(404).json({ success: false, message: 'No log file found' });
+    if (raw) {
+      const lines = raw.split('\n').filter(Boolean);
+      for (const line of lines) {
+        const m = line.match(/{.*}/);
+        if (!m) continue;
+        let entry; try { entry = JSON.parse(m[0]); } catch { continue; }
 
-    const lines = raw.split('\n').filter(Boolean);
-    for (const line of lines) {
-      const m = line.match(/{.*}/);
-      if (!m) continue;
-      let entry; try { entry = JSON.parse(m[0]); } catch { continue; }
-
-      const phones = phonesFromEntry(entry).map(p => p.replace(/\D/g, '').slice(-10)).filter(Boolean);
-      if (phones.includes(target)) {
-        const tsStart = line.indexOf('[');
-        const tsEnd = line.indexOf(']');
-        const timestamp = tsStart >= 0 && tsEnd > tsStart ? line.slice(tsStart + 1, tsEnd) : null;
-        return res.json({ success: true, timestamp, entry });
+        const phones = phonesFromEntry(entry).map(p => p.replace(/\D/g, '').slice(-10)).filter(Boolean);
+        if (phones.includes(target)) {
+          return res.json({
+            success: true,
+            source: 'logs',
+            timestamp: getTimestampFromLogLine(line),
+            entry
+          });
+        }
       }
     }
-    return res.status(404).json({ success: false, message: 'No matching line found for that phone' });
+
+    // 2) payloadIndex fallback
+    const records = getIndexRecordsByPhoneLast10(target);
+    const latest = records[0];
+    if (!latest) {
+      return res.status(404).json({ success: false, message: 'No matching line found for that phone' });
+    }
+
+    return res.json({
+      success: true,
+      source: 'payloadIndex',
+      timestamp: latest.updatedAt || null,
+      entry: latest
+    });
   } catch (e) {
     console.error('find-latest-by-phone error:', e);
     return res.status(500).json({ success: false, message: 'Server error' });
