@@ -113,14 +113,17 @@ function getOrGenerateTwistCode(loanId, expiration) {
   fs.writeFileSync(twistCodePath, JSON.stringify(data, null, 2));
   return newCode;
 }
+
 function middle4Of(code12) {
   if (!code12 || String(code12).length < 12) return null;
   return String(code12).slice(4, 8);
 }
+
 function parseMMYY(mmYY) {
   const m = String(mmYY || '').match(/^(\d{2})\/(\d{2})$/);
   return m ? { mm: m[1], yy: m[2] } : null;
 }
+
 function normalizeMMYYFromStored(v) {
   if (!v) return null;
   const s = String(v);
@@ -146,14 +149,12 @@ function phonesFromEntry(entry) {
 
   const out = [];
 
-  // payloadIndex shape
   if (Array.isArray(entry.phones)) {
     for (const p of entry.phones) {
       if (typeof p === 'string') out.push(p);
     }
   }
 
-  // legacy / log payload shapes
   for (const [k, v] of Object.entries(entry)) {
     if (!/phone/i.test(k)) continue;
 
@@ -174,14 +175,12 @@ function emailsFromEntry(entry) {
 
   const out = [];
 
-  // payloadIndex shape
   if (Array.isArray(entry.emails)) {
     for (const e of entry.emails) {
       if (typeof e === 'string') out.push(e.trim().toLowerCase());
     }
   }
 
-  // legacy / log payload shapes
   for (const [k, v] of Object.entries(entry)) {
     if (!/email/i.test(k)) continue;
 
@@ -195,6 +194,33 @@ function emailsFromEntry(entry) {
   }
 
   return [...new Set(out.filter(Boolean))];
+}
+
+function normalizePayloadRecord(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+
+  const phones = phonesFromEntry(entry);
+  const emails = emailsFromEntry(entry);
+
+  return {
+    ...entry,
+
+    // legacy-compatible aliases
+    phone: entry.phone || entry.customer_phone || phones[0] || '',
+    customer_phone: entry.customer_phone || entry.phone || phones[0] || '',
+
+    email: entry.email || entry.customer_email || emails[0] || '',
+    customer_email: entry.customer_email || entry.email || emails[0] || '',
+
+    postal_code: entry.postal_code || entry.postal || '',
+    postal: entry.postal || entry.postal_code || '',
+
+    state: entry.state || entry.province || '',
+    province: entry.province || entry.state || '',
+
+    phones,
+    emails
+  };
 }
 
 const last10 = (v) => String(v || '').replace(/\D/g, '').slice(-10);
@@ -270,7 +296,9 @@ function getIndexRecordsByPhoneLast10(l10) {
     return keys
       .map(k => idx.byKey[k])
       .filter(Boolean)
-      .sort((a, b) => getIndexRecordUpdatedAt(b) - getIndexRecordUpdatedAt(a));
+      .sort((a, b) => getIndexRecordUpdatedAt(b) - getIndexRecordUpdatedAt(a))
+      .map(normalizePayloadRecord)
+      .filter(Boolean);
   } catch (e) {
     console.error('getIndexRecordsByPhoneLast10 error:', e);
     return [];
@@ -285,7 +313,7 @@ function getIndexLatestByLoanLast6(last6) {
       .filter(rec => String(rec.loan_id || '').endsWith(last6))
       .sort((a, b) => getIndexRecordUpdatedAt(b) - getIndexRecordUpdatedAt(a));
 
-    return recs[0] || null;
+    return recs[0] ? normalizePayloadRecord(recs[0]) : null;
   } catch (e) {
     console.error('getIndexLatestByLoanLast6 error:', e);
     return null;
@@ -308,7 +336,7 @@ async function readLatestPayloadByLoanIdEndsWith(last6) {
         try {
           const obj = JSON.parse(jsonMatch[0]);
           const loanId = String(obj.loan_id || '');
-          if (loanId.endsWith(last6)) return obj;
+          if (loanId.endsWith(last6)) return normalizePayloadRecord(obj);
         } catch {}
       }
     }
@@ -316,9 +344,8 @@ async function readLatestPayloadByLoanIdEndsWith(last6) {
     console.error('readLatestPayloadByLoanIdEndsWith log scan error:', e);
   }
 
-  // Fallback to durable payload index
   const idxHit = getIndexLatestByLoanLast6(last6);
-  if (idxHit) return idxHit;
+  if (idxHit) return normalizePayloadRecord(idxHit);
 
   return null;
 }
@@ -370,7 +397,6 @@ app.post('/otp/derive-phone', async (req, res) => {
   try {
     const { cardNumber, expiration, twist, postal, email } = req.body || {};
 
-    // Normalize + basic format checks (mapped to specific fields/messages)
     const cleanCard = String(cardNumber || '').replace(/\D/g, '');
     if (cleanCard.length !== 14 || !cleanCard.startsWith('71461567')) {
       return res.status(400).json({ success: false, message: 'Incorrect Card Number' });
@@ -389,7 +415,6 @@ app.post('/otp/derive-phone', async (req, res) => {
     const inPostal = String(postal || '').trim().toUpperCase().replace(/\s/g, '');
     const inEmail  = String(email  || '').trim().toLowerCase();
 
-    // Find latest payload for this loan (by card last 6)
     const last6 = cleanCard.slice(-6);
     const latest = await readLatestPayloadByLoanIdEndsWith(last6);
     if (!latest) {
@@ -403,12 +428,10 @@ app.post('/otp/derive-phone', async (req, res) => {
     const acExpiryRaw = String(latest.contract_expiration || '');
     const acExpMMYY = toMMYY(acExpiryRaw);
 
-    // 1) Expiration must match
     if (acExpMMYY && inExpMMYY !== acExpMMYY) {
       return res.status(400).json({ success: false, message: 'Expiration does not match contract.' });
     }
 
-    // 2) TWIST middle 4 must match (deterministic code from code.json)
     const hit = resolveTwistCodeFromLoanAndExpiration(loanId, acExpiryRaw, { generateIfMissing: !!(loanId && acExpiryRaw) });
     const fullCode = hit.twistcode;
 
@@ -417,17 +440,14 @@ app.post('/otp/derive-phone', async (req, res) => {
       return res.status(400).json({ success: false, message: 'TWIST code incorrect.' });
     }
 
-    // 3) Postal must match
     if (acPostal && inPostal !== acPostal) {
       return res.status(400).json({ success: false, message: 'Postal code does not match account.' });
     }
 
-    // 4) Email must match (if on file and provided)
     if (acEmail && inEmail && inEmail !== acEmail) {
       return res.status(400).json({ success: false, message: 'Email does not match account.' });
     }
 
-    // All details validated → now (and only now) reveal phone for OTP
     const phones = phonesFromEntry(latest);
     let phone = null;
     for (const p of phones) {
@@ -440,7 +460,7 @@ app.post('/otp/derive-phone', async (req, res) => {
 
     return res.json({ success: true, phone, loan_id: loanId });
   } catch (e) {
-    console.error('/otp/derive-phone error', e);
+    console.error('/otp/derive-phone error:', e);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 });
@@ -458,25 +478,22 @@ app.post('/pre-validate', async (req, res) => {
       email,
       phone,
       postal,
-      address, city,           // captured
-      province,                // PATCH: capture province
+      address, city,
+      province,
       otpCode
     } = req.body || {};
 
-    // Presence (kept light; client enforces province required when used)
     if (!transaction_id || !orderno || !amount || !cardNumber || !expiration || !twist || !email || !phone || !postal || !otpCode) {
       return res.status(400).json({ ok: false, message: 'Missing required fields.' });
     }
 
-    // Card checks (PATCH: length + prefix + wording)
     const cleanCard = String(cardNumber).replace(/\D/g, '');
     if (cleanCard.length !== 14) return res.json({ ok: false, message: 'Incorrect Card Number' });
     if (!cleanCard.startsWith('71461567')) return res.json({ ok: false, message: 'Incorrect Card Number' });
 
-    // Map last 6 -> latest payload for that loan
     const last6 = cleanCard.slice(-6);
     const latest = await readLatestPayloadByLoanIdEndsWith(last6);
-    if (!latest) return res.json({ ok: false, message: 'Incorrect Card Number' }); // requested wording
+    if (!latest) return res.json({ ok: false, message: 'Incorrect Card Number' });
 
     const loanId = String(latest.loan_id || '');
     const acEmails = emailsFromEntry(latest);
@@ -486,41 +503,35 @@ app.post('/pre-validate', async (req, res) => {
     const acPhone = String(allPhones[0] || '').replace(/[^\d]/g, '');
 
     const acPostal = String(latest.postal_code || latest.postal || '').trim().toUpperCase();
-    const acProvince = String(latest.province || latest.state || '').trim().toUpperCase(); // PATCH: province support
+    const acProvince = String(latest.province || latest.state || '').trim().toUpperCase();
     const acAvail = Number(latest.available_credit || 0);
-    const acExpiryRaw = String(latest.contract_expiration || ''); // may be MM/YY or YYYY-MM-DD or MMYY
+    const acExpiryRaw = String(latest.contract_expiration || '');
 
-    // Email
     if (acEmail && String(email).trim().toLowerCase() !== acEmail) {
       return res.json({ ok: false, message: 'Email does not match account.' });
     }
 
-    // Phone (last 10)
     const inPhoneDigits = String(phone).replace(/[^\d]/g, '');
     if (acPhone && inPhoneDigits.slice(-10) !== acPhone.slice(-10)) {
       return res.json({ ok: false, message: 'Phone does not match account.' });
     }
 
-    // Postal
     const inPostal = String(postal).trim().toUpperCase().replace(/\s/g, '');
     const refPostal = acPostal.replace(/\s/g, '');
     if (acPostal && inPostal !== refPostal) {
       return res.json({ ok: false, message: 'Postal code does not match account.' });
     }
 
-    // Province (PATCH)
     const inProvince = String(province || '').trim().toUpperCase();
     if (acProvince && inProvince && inProvince !== acProvince) {
       return res.json({ ok: false, message: 'Province does not match account.' });
     }
 
-    // Amount <= available_credit
     const amt = Number(String(amount).replace(/[^\d.]/g, ''));
     if (Number.isFinite(acAvail) && Number.isFinite(amt) && amt > acAvail) {
       return res.json({ ok: false, message: 'Amount exceeds available credit.' });
     }
 
-    // Expiration match (form sends MMYY; compare as MMYY)
     const inExpMMYY = toMMYY(expiration);
     if (!inExpMMYY) return res.json({ ok: false, message: 'Expiration format invalid (MMYY).' });
     const storedMMYY = toMMYY(acExpiryRaw);
@@ -528,14 +539,12 @@ app.post('/pre-validate', async (req, res) => {
       return res.json({ ok: false, message: 'Expiration does not match contract.' });
     }
 
-    // TWIST middle 4 (code.json uses hash(loan_id|contract_expiration) — support format variants)
     const codeHit = resolveTwistCodeFromLoanAndExpiration(loanId, acExpiryRaw);
     const mid4 = middle4Of(codeHit.twistcode);
     if (!mid4 || String(twist) !== mid4) {
       return res.json({ ok: false, message: 'TWIST code incorrect.' });
     }
 
-    // OTP verification: skip re-consume if UI already verified via proxy
     const normPhone = normE164CA(phone);
     if (!normPhone) return res.json({ ok: false, message: 'Phone format invalid.' });
 
@@ -559,7 +568,6 @@ app.post('/pre-validate', async (req, res) => {
       return res.json({ ok: false, message: 'OTP invalid or expired.' });
     }
 
-    // Mark as pending so client waiting screen is allowed
     statuses[transaction_id] = 'pending';
 
     return res.json({ ok: true, message: 'Validated', loan_id: loanId });
@@ -587,17 +595,15 @@ app.post('/validate-transaction', async (req, res) => {
       city,
       name,
       product_description,
-      province            // PATCH: accept province from client
+      province
     } = payload;
 
-    // Run validations against logs and code.json (same core checks as before)
     const result = await validateTransaction({ amount, cardNumber, expiration, twist, postal });
 
     if (!result.ok) {
       return res.json({ ok: false, status: 'denied', message: result.message || 'Denied' });
     }
 
-    // If approved, record it via the existing /store-status
     const apiKey = process.env.API_KEY;
     const base = process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${process.env.PORT || 3000}`;
 
@@ -616,7 +622,6 @@ app.post('/validate-transaction', async (req, res) => {
       contract_expiration: result.matched.contract_expiration,
       available_credit: result.matched.available_credit,
       product_description,
-      /* PATCH: forward province as state (for AC field 85) and keep province for logging */
       state: province,
       province
     };
@@ -629,7 +634,6 @@ app.post('/validate-transaction', async (req, res) => {
       });
     } catch (e) {
       console.error('Store-status post failed:', e);
-      // proceed; local status is still set below
     }
 
     if (transaction_id) statuses[transaction_id] = 'approved';
@@ -661,7 +665,7 @@ app.post('/store-status', async (req, res) => {
     limit,
     phone,
     code,
-    product_description // optional
+    product_description
   } = req.body;
 
   if (!transaction_id || !status) {
@@ -675,10 +679,8 @@ app.post('/store-status', async (req, res) => {
 
   statuses[transaction_id] = status;
 
-  // Persist essentials to durable index for later lookups
   try { payloadIndex.upsertIndexFromPayload(req.body); } catch (e) { console.error('upsertIndexFromPayload error:', e); }
 
-  // AC updates only when transaction_id is exactly 'n/a' (case-insensitive)
   const shouldUpdateAC = String(transaction_id || '').trim().toLowerCase() === 'n/a';
 
   if (shouldUpdateAC && email) {
@@ -704,7 +706,6 @@ app.post('/store-status', async (req, res) => {
     console.log(`[AC SKIP] transaction_id='${transaction_id}' — skipping ActiveCampaign update`);
   }
 
-  // Ensure a twistcode exists
   if (loan_id && contract_expiration) {
     getOrGenerateTwistCode(loan_id, contract_expiration);
   }
@@ -735,8 +736,7 @@ app.get('/check-status', (req, res) => {
 /**
  * Robust "latest by phone" (newest → oldest), last-10-digit matching.
  * Returns entire twist code if found.
- * Accepts any JSON line (with or without "/store-status:") and any phone-like field.
- * Normalizes expiration to hit code.json.
+ * Accepts any JSON line and any phone-like field.
  * Searches logs first, then payloadIndex fallback.
  */
 app.get('/check-latest', (req, res) => {
@@ -748,7 +748,6 @@ app.get('/check-latest', (req, res) => {
     return res.status(400).json({ success: false, message: 'Invalid phone format' });
   }
 
-  // 1) Logs first (preserve existing behavior)
   const raw = readMergedLogText();
   if (raw) {
     try {
@@ -759,7 +758,7 @@ app.get('/check-latest', (req, res) => {
         if (!jsonMatch) continue;
 
         let entry;
-        try { entry = JSON.parse(jsonMatch[0]); } catch { continue; }
+        try { entry = normalizePayloadRecord(JSON.parse(jsonMatch[0])); } catch { continue; }
 
         const ePhones = phonesFromEntry(entry);
         const hasMatch = ePhones.some(p => last10(p) === qLast10);
@@ -782,7 +781,6 @@ app.get('/check-latest', (req, res) => {
     }
   }
 
-  // 2) payloadIndex fallback
   try {
     const records = getIndexRecordsByPhoneLast10(qLast10);
     const latest = records[0];
@@ -824,7 +822,6 @@ app.get('/code/middle4-by-phone', (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid phone format' });
     }
 
-    // 1) Logs first (preserve existing behavior)
     const raw = readMergedLogText();
     if (raw) {
       const lines = raw.split('\n').filter(Boolean);
@@ -834,7 +831,7 @@ app.get('/code/middle4-by-phone', (req, res) => {
         if (!jsonMatch) continue;
 
         let entry;
-        try { entry = JSON.parse(jsonMatch[0]); } catch { continue; }
+        try { entry = normalizePayloadRecord(JSON.parse(jsonMatch[0])); } catch { continue; }
 
         const ePhones = phonesFromEntry(entry);
         const matched = ePhones.some(p => last10(p) === qLast10);
@@ -862,7 +859,6 @@ app.get('/code/middle4-by-phone', (req, res) => {
       }
     }
 
-    // 2) payloadIndex fallback
     const records = getIndexRecordsByPhoneLast10(qLast10);
     const latest = records[0];
     if (!latest) {
@@ -931,7 +927,6 @@ app.get('/admin/log-info', (_req, res) => {
   const candidates = [
     LOG_PRIMARY,
     LOG_FALLBACK,
-    // Extra historical names if ever used:
     path.join('/mnt/data', 'twist_webhook.txt'),
     path.join(__dirname, 'twist_webhook.txt'),
   ];
@@ -954,14 +949,14 @@ app.get('/admin/find-latest-by-phone', (_req, res) => {
     const target = phone.replace(/\D/g, '').slice(-10);
     if (target.length !== 10) return res.status(400).json({ success: false, message: 'Invalid phone' });
 
-    // 1) Logs first
     const raw = readMergedLogText();
     if (raw) {
       const lines = raw.split('\n').filter(Boolean);
       for (const line of lines) {
         const m = line.match(/{.*}/);
         if (!m) continue;
-        let entry; try { entry = JSON.parse(m[0]); } catch { continue; }
+        let entry; 
+        try { entry = normalizePayloadRecord(JSON.parse(m[0])); } catch { continue; }
 
         const phones = phonesFromEntry(entry).map(p => p.replace(/\D/g, '').slice(-10)).filter(Boolean);
         if (phones.includes(target)) {
@@ -975,7 +970,6 @@ app.get('/admin/find-latest-by-phone', (_req, res) => {
       }
     }
 
-    // 2) payloadIndex fallback
     const records = getIndexRecordsByPhoneLast10(target);
     const latest = records[0];
     if (!latest) {
@@ -1001,12 +995,10 @@ app.get('/lookup/by-code', (req, res) => {
   const code = String(req.query.code || '').trim();
   if (!/^\d{12}$/.test(code)) return res.status(400).json({ success: false, message: 'Invalid code' });
 
-  // 1) Index first
   let idx = payloadIndex.loadPayloadIndex();
   let key = idx.byCode[code];
   let rec = key && idx.byKey[key];
 
-  // 2) Not in index? try code.json + current logs then re-index
   if (!rec) {
     const k = payloadIndex.reverseFindKeyByCode(code);
     if (k) {
@@ -1025,7 +1017,7 @@ app.get('/lookup/by-code', (req, res) => {
   return res.json({ success: true, ...payloadIndex.summarizeRecord(rec) });
 });
 
-// By loan + expiration (exact format used when stored)
+// By loan + expiration
 app.get('/lookup/by-loan', (req, res) => {
   const loan_id = String(req.query.loan_id || '').trim();
   const expRaw  = String(req.query.contract_expiration || '').trim();
@@ -1039,7 +1031,7 @@ app.get('/lookup/by-loan', (req, res) => {
   return res.json({ success: true, ...payloadIndex.summarizeRecord(rec) });
 });
 
-// By phone (last10)
+// By phone
 app.get('/lookup/by-phone', (req, res) => {
   const l10 = String(req.query.phone || '').replace(/\D/g, '').slice(-10);
   if (l10.length !== 10) return res.status(400).json({ success: false, message: 'Invalid phone' });
